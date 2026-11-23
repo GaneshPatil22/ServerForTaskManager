@@ -137,3 +137,7 @@ routes yet; they arrive with S3, which also makes `SUPABASE_URL` required
 at startup. The tests have never seen a real Supabase token, because there
 is no project yet. First thing once there is: sign in and check one real
 token end to end.
+
+### 2026-11-24 — Anonymous Supabase users stay refused
+Confirmed by Ganesh. `allowAnonymous = false` is the decision, not just a
+default.
