@@ -60,8 +60,6 @@ struct APIHandler: APIProtocol {
             }
         }
 
-        static let notYet = Stop(
-            status: 501, code: "not_implemented", message: "this endpoint arrives in a later step")
 
         var problem: Components.Responses.Problem {
             .init(body: .json(.init(code: code, message: message)))
@@ -455,13 +453,35 @@ struct APIHandler: APIProtocol {
         return generator.next()
     }
 
+    // MARK: - Questions (T3)
+    //
+    // Nothing creates questions yet: Brain's `judgeLink`, which will ask them,
+    // isn't routed (S5d). Until then the honest answers are "there are none"
+    // and "no such question", not "not implemented". A 501 also showed as a
+    // red console error in every browser on every page load.
+
     func listQuestions(_ input: Operations.ListQuestions.Input) async throws
         -> Operations.ListQuestions.Output
-    { .default(statusCode: 501, Stop.notYet.problem) }
+    {
+        try await run(
+            {
+                _ = try await store()  // still authenticated, still creates the user row
+                return .ok(.init(body: .json(.init(questions: []))))
+            }, problem: { .default(statusCode: $0, $1) })
+    }
 
     func answerQuestion(_ input: Operations.AnswerQuestion.Input) async throws
         -> Operations.AnswerQuestion.Output
-    { .default(statusCode: 501, Stop.notYet.problem) }
+    {
+        try await run(
+            {
+                _ = try check { () throws(Validation.Failure) in
+                    try Validation.ulid(input.path.id, field: "id")
+                }
+                _ = try await store()
+                throw Stop.notFound("question")
+            }, problem: { .default(statusCode: $0, $1) })
+    }
 }
 
 /// Users whose row already exists, so `ensureUser` runs once per user per

@@ -353,13 +353,26 @@ struct ItemGoalTests {
     }
 }
 
-@Suite("Later steps answer 501")
+@Suite("Questions")
 struct NotYetTests {
-    @Test func questionsWaitOnBrainsJudgeLink() async throws {
+    /// Until Brain routes judgeLink, there are no questions: an empty list,
+    /// and answering any id is "not found".
+    @Test func noQuestionsUntilBrainAsksThem() async throws {
+        let me = Caller()
         try await testApp().test(.router) { client in
-            let r = try await Caller().send(client, .get, "/v1/questions")
-            #expect(r.status == .notImplemented)
-            #expect(r.body["code"] as? String == "not_implemented")
+            let list = try await me.send(client, .get, "/v1/questions")
+            #expect(list.status == .ok)
+            #expect((list.body["questions"] as? [Any])?.isEmpty == true)
+
+            let answer = try await me.send(
+                client, .post, "/v1/questions/\(newID().rawValue)/answer",
+                json: ["option": "task"])
+            #expect(answer.status == .notFound)
+
+            let unauthenticated = try await client.execute(uri: "/v1/questions", method: .get) {
+                $0.status
+            }
+            #expect(unauthenticated == .unauthorized)
         }
     }
 }

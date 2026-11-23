@@ -444,3 +444,13 @@ compared date *strings* exactly would need updating.
 
 Captures refused before this fix are held in the website's outbox, marked
 refused (its policy for 400), not lost.
+
+### 2026-11-24 — Questions answer "none" instead of 501
+
+Reverses the 501 part of "Questions (T3) fold into S5", with Ganesh's OK.
+`GET /v1/questions` returns **200 with an empty list**, and answering any id
+returns **404**. Nothing creates questions until Brain routes `judgeLink`, so
+"there are none" is the true answer, not "not implemented". The 501 also
+showed as a red console error in every browser on every page load, and no
+client code can hide that. The contract is unchanged; when Brain asks real
+questions, the same endpoint starts returning them and clients need no change.
