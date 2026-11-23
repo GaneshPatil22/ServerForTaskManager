@@ -89,6 +89,7 @@ public final class Database: Sendable {
     public func migrate() async throws {
         let migrations = DatabaseMigrations()
         await migrations.add(M0001_CoreTables())
+        await migrations.add(M0002_BudgetCounters())
         try await migrations.apply(client: client, logger: logger, dryRun: false)
     }
 

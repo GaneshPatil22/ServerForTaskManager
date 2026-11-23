@@ -6,7 +6,7 @@ import PackageDescription
 // SwiftPM names a path dependency after its folder and a git one after its URL,
 // so the product references below must use whichever identity is active.
 let brainFromGit = Context.environment["BRAIN_FROM_GIT"] == "1"
-let brainTag: Version = "0.4.0"
+let brainTag: Version = "0.5.0"
 let brain: Package.Dependency =
     brainFromGit
     ? .package(url: "https://github.com/GaneshPatil22/BrainForTaskManager.git", exact: brainTag)
@@ -47,6 +47,7 @@ let package = Package(
                 .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "PostgresMigrations", package: "postgres-migrations"),
                 .product(name: "BrainCore", package: brainPackage),
+                .product(name: "BrainHarness", package: brainPackage),
             ]
         ),
         // The HTTP contract. `openapi.yaml` is the source of truth; types and
@@ -112,6 +113,7 @@ let package = Package(
             dependencies: [
                 "Storage",
                 "TestDatabase",
+                .product(name: "BrainHarness", package: brainPackage),
                 .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "BrainCore", package: brainPackage),
             ]

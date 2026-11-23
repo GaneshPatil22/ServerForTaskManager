@@ -225,3 +225,43 @@ for no token and for an HS256 token.
 **Not done yet:** a capture is stored, but nothing enriches it. Its status
 stays `raw` until the S4 worker exists. Real Supabase tokens are still
 unverified, because there is no project yet.
+
+### 2026-11-24 — S4a: Brain 0.5.0, daily budget counters in Postgres
+
+Brain pinned to **0.5.0** (`44fb123`). The CI-mode build, resolving Brain
+from that tag on GitHub, was checked.
+
+**`PostgresBudgetStore`** implements Brain's `BudgetStore` (migration
+`M0002_BudgetCounters`):
+- **Check-and-charge is atomic.** One transaction locks the model's row, then
+  the user's row, always in that order, so two callers can't both pass a
+  check, and can't deadlock each other. **Checked that this matters:** with
+  `FOR UPDATE` removed, both concurrency tests fail on every run, which
+  reproduces Brain's "40 callers past a limit of 5".
+- **Same answers as Brain.** A scripted sequence runs through Brain's
+  `InMemoryBudgetStore` and ours, and every answer must match, including
+  which limit refused.
+- **Keyed by `ProviderDay.key`**, Pacific calendar day, following DST. A test
+  pins midnight on both sides of the 2026-11-01 change.
+- **Fail-closed.** `reserve` can't throw, so if Postgres is unreachable the
+  call is *refused*: enrichment waits, and the capture is safe. The refusal
+  reuses `requestsPerDay` because the protocol has no "store unavailable"
+  case; the error log says what really happened. Worth a dedicated case in
+  Brain eventually; not blocking.
+- **Not user data.** These are deployment-wide counters, so this is the one
+  storage type outside `UserStore`. `user_key` only enforces fair share and is
+  never read back to anyone.
+
+**Accepted from Brain, recorded so it isn't re-asked:**
+- No refunds: a charged request stays charged.
+- `classifyType` never routes to T3. The questions endpoint stays empty until
+  `judgeLink` exists.
+- Gemma and Flash-Lite limits can no longer be verified from Google's public
+  page. `ProductionRouter.staleLimits(now:)` will be logged at startup (S4b).
+
+**Blocker for S4b:** `BrainProduction` is a target but not a *product* in
+Brain's `Package.swift`, so the server can't import `ProductionRouter`.
+Brain needs to add `.library(name: "BrainProduction", ...)` and tag 0.5.1.
+
+Old daily rows are kept: about two rows per model per day is negligible.
+Pruning can come later if it ever matters.
