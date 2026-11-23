@@ -111,7 +111,7 @@ struct ItemEditTests {
             let r = try await me.send(
                 client, .patch, uri(item), json: ["dueAt": "2026-12-01T10:00:00Z"])
             let due = r.body["dueAt"] as! [String: Any]
-            #expect(due["value"] as? String == "2026-12-01T10:00:00Z")
+            #expect(due["value"] as? String == "2026-12-01T10:00:00.000Z")
             #expect(due["decidedBy"] as? String == "user")
         }
     }

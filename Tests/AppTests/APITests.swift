@@ -135,12 +135,33 @@ struct CaptureTests {
             let future = try await me.send(
                 client, .post, "/v1/captures", json: newCapture(at: now.addingTimeInterval(86400)))
             #expect(future.status == .created)
-            #expect(future.body["capturedAt"] as? String == "2026-11-18T11:06:40Z")
+            #expect(future.body["capturedAt"] as? String == "2026-11-18T11:06:40.000Z")
 
             let offline = now.addingTimeInterval(-3 * 86400)
             let past = try await me.send(
                 client, .post, "/v1/captures", json: newCapture(at: offline))
-            #expect(past.body["capturedAt"] as? String == "2026-11-15T11:06:40Z")
+            #expect(past.body["capturedAt"] as? String == "2026-11-15T11:06:40.000Z")
+        }
+    }
+
+    /// What a browser sends: `new Date().toISOString()` always has
+    /// milliseconds. Found in the first real end-to-end run, where every
+    /// capture from the website was refused with 400.
+    @Test func browserTimestampsWithMillisecondsAreAccepted() async throws {
+        let me = Caller()
+        var body = newCapture()
+        body["capturedAt"] = "2026-11-18T11:06:39.123Z"
+        let capture = body
+        try await testApp(clock: { now }).test(.router) { client in
+            let r = try await me.send(client, .post, "/v1/captures", json: capture)
+            #expect(r.status == .created)
+            #expect(
+                r.body["capturedAt"] as? String == "2026-11-18T11:06:39.123Z",
+                "got \(r.body["capturedAt"] ?? "nil")")
+            // And after a round trip through Postgres (microseconds, Double).
+            let id = capture["id"] as! String
+            let stored = try await me.send(client, .get, "/v1/captures/\(id)")
+            #expect(stored.body["capturedAt"] as? String == "2026-11-18T11:06:39.123Z")
         }
     }
 

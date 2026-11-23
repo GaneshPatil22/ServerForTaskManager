@@ -421,3 +421,26 @@ needed** once web and API live on different origins in production.
 **Supabase Auth limit to remember:** the built-in email sender only sends to
 members of the Supabase organisation, with a small hourly cap. Fine for
 testing; real users need custom SMTP before launch.
+
+### 2026-11-24 — First real end-to-end run: every capture refused (fixed)
+
+The first capture from the website in http mode got **400**. Cause: the OpenAPI
+runtime's default date parser (`.iso8601`) rejects fractional seconds, and
+browsers always send them (`new Date().toISOString()` → `…T10:00:00.123Z`).
+All server tests had used whole seconds, so none caught it.
+
+Fix (`BrowserFriendlyDates`): dates are **accepted with or without fractional
+seconds and always sent with milliseconds**. A second bug turned up on the way:
+`.123` came back as `.122`. Postgres keeps microseconds, `Date` is a `Double`
+(so `.123` is really `.12299999…`), and Foundation's formatter *truncates*
+fractions. Milliseconds are now computed as an integer and written out by hand.
+
+A test reproduces the browser's format and checks it survives both the
+response and a read back through Postgres.
+
+**Wire format change:** dates now always carry three fractional digits
+(`…T11:06:40.000Z`). Clients that parse dates are unaffected; any client that
+compared date *strings* exactly would need updating.
+
+Captures refused before this fix are held in the website's outbox, marked
+refused (its policy for 400), not lost.

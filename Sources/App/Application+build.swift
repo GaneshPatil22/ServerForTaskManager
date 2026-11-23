@@ -107,7 +107,9 @@ func buildRouter(_ dependencies: Dependencies) throws -> Router<AppRequestContex
         database: dependencies.database, enrichment: dependencies.enrichment,
         clock: dependencies.clock
     )
-    .registerHandlers(on: api, middlewares: [ErrorHandlingMiddleware()])
+    .registerHandlers(
+        on: api, configuration: .init(dateTranscoder: BrowserFriendlyDates()),
+        middlewares: [ErrorHandlingMiddleware()])
     return router
 }
 
