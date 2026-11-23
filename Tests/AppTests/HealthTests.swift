@@ -4,7 +4,9 @@ import Hummingbird
 import HummingbirdTesting
 import Logging
 import Testing
+import Storage
 import TestDatabase
+import Worker
 
 @testable import App
 
@@ -18,8 +20,15 @@ struct TestArguments: AppArguments {
 func testApp(clock: @escaping @Sendable () -> Date = { Date() }) async throws
     -> some ApplicationProtocol
 {
+    try await testApp(clock: clock, enrichment: RecordingEnqueuer())
+}
+
+func testApp(
+    clock: @escaping @Sendable () -> Date = { Date() }, enrichment: any EnrichmentEnqueuing
+) async throws -> some ApplicationProtocol {
     let deps = Dependencies(
-        database: try await TestDatabase.get(), verifier: FakeVerifier(), clock: clock)
+        database: try await TestDatabase.get(), verifier: FakeVerifier(),
+        enrichment: enrichment, clock: clock)
     return Application(router: try buildRouter(deps))
 }
 
@@ -46,4 +55,10 @@ func testApp(clock: @escaping @Sendable () -> Date = { Date() }) async throws
 @Test func linksAgainstBrain() {
     #expect(ULID("01ARZ3NDEKTSV4RRFFQ69G5FAV") != nil)
     #expect(ULID("not-a-ulid") == nil)
+}
+
+/// Records what the API asked to enrich, instead of queueing it.
+actor RecordingEnqueuer: EnrichmentEnqueuing {
+    private(set) var queued: [ULID] = []
+    func enqueue(user: UserID, capture: ULID) async { queued.append(capture) }
 }

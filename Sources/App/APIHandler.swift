@@ -2,6 +2,7 @@ import API
 import BrainCore
 import Foundation
 import Storage
+import Worker
 
 /// The API. Every handler gets its user from `RequestUser`, set by
 /// `AuthMiddleware`, and reaches data only through `UserStore`.
@@ -10,11 +11,16 @@ import Storage
 /// thrown. An unknown id and another user's id both give the same 404.
 struct APIHandler: APIProtocol {
     let database: Database
+    let enrichment: any EnrichmentEnqueuing
     let users: KnownUsers
     let clock: @Sendable () -> Date
 
-    init(database: Database, clock: @escaping @Sendable () -> Date = { Date() }) {
+    init(
+        database: Database, enrichment: any EnrichmentEnqueuing,
+        clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
         self.database = database
+        self.enrichment = enrichment
         self.users = KnownUsers()
         self.clock = clock
     }
@@ -128,7 +134,11 @@ struct APIHandler: APIProtocol {
                     source: body.source.map { convert($0) } ?? .text,
                     createdAt: capturedAt, status: .raw)
 
-                let (stored, created) = try await store().insertCapture(capture)
+                let store = try await store()
+                let (stored, created) = try await store.insertCapture(capture)
+                // Queued only after the capture is committed. If this push is
+                // lost, the sweeper queues it later; the capture is already safe.
+                if created { await enrichment.enqueue(user: store.user, capture: stored.id) }
                 let json = Components.Schemas.Capture(stored)
                 return created ? .created(.init(body: .json(json))) : .ok(.init(body: .json(json)))
             }, problem: { .default(statusCode: $0, $1) })

@@ -6,7 +6,7 @@ import PackageDescription
 // SwiftPM names a path dependency after its folder and a git one after its URL,
 // so the product references below must use whichever identity is active.
 let brainFromGit = Context.environment["BRAIN_FROM_GIT"] == "1"
-let brainTag: Version = "0.5.0"
+let brainTag: Version = "0.5.1"
 let brain: Package.Dependency =
     brainFromGit
     ? .package(url: "https://github.com/GaneshPatil22/BrainForTaskManager.git", exact: brainTag)
@@ -15,7 +15,7 @@ let brainPackage = brainFromGit ? "BrainForTaskManager" : "Brain"
 
 let package = Package(
     name: "Server",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         .executable(name: "brain-server", targets: ["App"])
     ],
@@ -27,6 +27,9 @@ let package = Package(
         .package(
             url: "https://github.com/hummingbird-project/postgres-migrations.git", exact: "1.2.0"),
         .package(url: "https://github.com/vapor/jwt-kit.git", exact: "5.9.1"),
+        .package(url: "https://github.com/hummingbird-project/swift-jobs.git", exact: "1.4.0"),
+        .package(
+            url: "https://github.com/hummingbird-project/swift-jobs-postgres.git", exact: "1.5.0"),
         .package(url: "https://github.com/apple/swift-openapi-generator.git", exact: "1.14.4"),
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", exact: "1.13.4"),
         .package(
@@ -48,6 +51,7 @@ let package = Package(
                 .product(name: "PostgresMigrations", package: "postgres-migrations"),
                 .product(name: "BrainCore", package: brainPackage),
                 .product(name: "BrainHarness", package: brainPackage),
+                .product(name: "JobsPostgres", package: "swift-jobs-postgres"),
             ]
         ),
         // The HTTP contract. `openapi.yaml` is the source of truth; types and
@@ -69,6 +73,20 @@ let package = Package(
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
             ]
         ),
+        // Background enrichment: swift-jobs on Postgres, Brain's pipeline,
+        // and the sweeper that guarantees no capture is left unenriched.
+        .target(
+            name: "Worker",
+            dependencies: [
+                "Storage",
+                .product(name: "BrainCore", package: brainPackage),
+                .product(name: "BrainHarness", package: brainPackage),
+                .product(name: "BrainPipeline", package: brainPackage),
+                .product(name: "BrainProduction", package: brainPackage),
+                .product(name: "Jobs", package: "swift-jobs"),
+                .product(name: "JobsPostgres", package: "swift-jobs-postgres"),
+            ]
+        ),
         // Test helpers shared by every test target: one migrated test database
         // per test process. Not part of the server product.
         .target(
@@ -82,6 +100,9 @@ let package = Package(
                 "API",
                 "Auth",
                 "Storage",
+                "Worker",
+                .product(name: "BrainHarness", package: brainPackage),
+                .product(name: "BrainProduction", package: brainPackage),
                 .product(name: "OpenAPIHummingbird", package: "swift-openapi-hummingbird"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
@@ -94,6 +115,7 @@ let package = Package(
                 "App",
                 "Auth",
                 "Storage",
+                "Worker",
                 "TestDatabase",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "JWTKit", package: "jwt-kit"),
@@ -106,6 +128,16 @@ let package = Package(
                 "Auth",
                 .product(name: "JWTKit", package: "jwt-kit"),
                 .product(name: "CryptoExtras", package: "swift-crypto"),
+            ]
+        ),
+        .testTarget(
+            name: "WorkerTests",
+            dependencies: [
+                "Worker",
+                "Storage",
+                "TestDatabase",
+                .product(name: "BrainCore", package: brainPackage),
+                .product(name: "Jobs", package: "swift-jobs"),
             ]
         ),
         .testTarget(

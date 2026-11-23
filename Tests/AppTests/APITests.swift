@@ -6,6 +6,7 @@ import HummingbirdTesting
 import NIOCore
 import Storage
 import TestDatabase
+import Worker
 import Testing
 
 @testable import App
@@ -106,6 +107,17 @@ struct CaptureTests {
         }
         let stored = try await me.store().captures()
         #expect(stored.count == 1)
+    }
+
+    @Test func newCaptureIsQueuedOnceAndARetryIsNot() async throws {
+        let me = Caller()
+        let enqueuer = RecordingEnqueuer()
+        let capture = newCapture()
+        try await testApp(enrichment: enqueuer).test(.router) { client in
+            _ = try await me.send(client, .post, "/v1/captures", json: capture)
+            _ = try await me.send(client, .post, "/v1/captures", json: capture)
+        }
+        #expect(await enqueuer.queued.map(\.rawValue) == [capture["id"] as! String])
     }
 
     @Test func textIsStoredVerbatim() async throws {

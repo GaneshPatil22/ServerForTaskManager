@@ -1,5 +1,5 @@
 {
-  "originHash" : "3b0de36ec77171b3e7915e2d7525e768e95002c3be538806daaae927e5385529",
+  "originHash" : "50422f345d719d9d468397e68fdb7858f3515ca2c8221018d428ef1fd4436f0c",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -170,6 +170,24 @@
       "state" : {
         "revision" : "bff4b6903cdc99dda49649dd52f46c11cfd3ed50",
         "version" : "1.8.0"
+      }
+    },
+    {
+      "identity" : "swift-jobs",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hummingbird-project/swift-jobs.git",
+      "state" : {
+        "revision" : "329b54d39f461c6dc17f36adb8f0af615c4edee4",
+        "version" : "1.4.0"
+      }
+    },
+    {
+      "identity" : "swift-jobs-postgres",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hummingbird-project/swift-jobs-postgres.git",
+      "state" : {
+        "revision" : "93fe75d3a3b3b731e681c515af1dfd0e9facd2f6",
+        "version" : "1.5.0"
       }
     },
     {

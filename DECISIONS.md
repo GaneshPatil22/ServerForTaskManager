@@ -265,3 +265,66 @@ Brain needs to add `.library(name: "BrainProduction", ...)` and tag 0.5.1.
 
 Old daily rows are kept: about two rows per model per day is negligible.
 Pruning can come later if it ever matters.
+
+### 2026-11-24 — S4b: the enrichment worker
+
+Brain pinned to **0.5.1** (`963f7fd`), which exports `BrainProduction`. CI-mode
+build from that tag checked. swift-jobs 1.4.0 and swift-jobs-postgres 1.5.0,
+re-checked against their tags today. swift-jobs-postgres needs macOS 15, so the
+package minimum moved from 14 to 15. That doesn't matter on Linux.
+
+**A capture is never lost, and the queue doesn't have to be perfect for that.**
+`push` can't join our transaction (no connection parameter), so the capture's
+own status is the outbox:
+1. The capture is committed. Then a job is pushed, best effort.
+2. A sweeper runs every minute (swift-jobs scheduler). It requeues captures
+   that are `raw` past 2 minutes (job lost), `enriching` past 10 minutes
+   (worker died), or `failed` without an item. Each is tried at most 5 times
+   and kept regardless.
+3. Duplicate jobs are harmless. `claimCapture` lets exactly one worker take a
+   capture. `saveEnrichment` writes the item, its links and the status in one
+   transaction, refusing if an item already exists. **Each layer alone
+   prevents a duplicate item.** With the claim check removed, still one item.
+   With both removed, the concurrency test fails.
+
+**Guard 6 on the server too.** Every suggested link passes `BrainGraph.addEdge`
+(cycle, self-loop, endpoint and `serves` rules) before it can be stored.
+Brain's links today all point at the new item, so a cycle can't occur yet.
+The check is there for when they can.
+
+**A Brain behaviour handled here:** when a capture has nothing usable, Brain
+still creates an item but marks the capture `failed`. Retrying that would make
+a second item each time, so the worker never retries a capture that already
+has an item.
+
+**Models:** with `GOOGLE_AI_API_KEY` set, `ProductionRouter.make(mode: .live)`
+runs with the Postgres budget store, and stale free-tier limits are logged at
+startup. Without it, enrichment is rules only (T0), with a startup warning.
+Fair share is Brain's `fairShare` over decision-1's daily pool, sized by users
+who captured in the last 24 hours.
+
+**Startup order:** the HTTP server and the worker both wait until migrations
+finish (`StartupGate`), because the worker polls tables that don't exist until
+then.
+
+**Privacy:** the worker logs tiers, unresolved fields and token counts.
+`trace.notes` can quote the capture text and is never logged.
+
+**Verified:** 84 tests (storage 21, auth 25, app 27, worker 11), including
+the real Postgres queue end to end. Three mutations: two caught, one (claim
+check alone) correctly *not* caught, because the transactional save is a
+second, independent guard. The real binary: a capture inserted as "lost" was
+found by the sweeper and enriched by the worker, T0 only: typed `task`, due
+date from "tomorrow".
+
+**Seen, not ours:** postgres-migrations 1.2.0 logs each job-queue migration
+twice, under both groups. It logs its cumulative to-apply list per group.
+Checked in `_hb_pg_migrations` that each was applied exactly once.
+
+**Not done yet:**
+- The model path has not run live on the server. There's no key in this
+  environment, and Brain's tests cover the router itself.
+- Questions (T3) aren't stored. Nothing produces them today (S4c).
+- Budget exhaustion makes Brain degrade to T0 and still mark the capture
+  `enriched`. It isn't retried for a better answer the next day. That's
+  Brain's design; noted in case it matters later.

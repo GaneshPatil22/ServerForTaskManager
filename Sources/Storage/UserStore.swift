@@ -89,7 +89,7 @@ public struct UserStore: Sendable {
     public func setCaptureStatus(_ id: ULID, _ status: CaptureStatus) async throws -> Bool {
         try await returnsRow(
             """
-            UPDATE captures SET status = \(status.rawValue)
+            UPDATE captures SET status = \(status.rawValue), status_changed_at = now()
             WHERE user_id = \(uid) AND id = \(id.rawValue) RETURNING id
             """)
     }
@@ -192,12 +192,16 @@ public struct UserStore: Sendable {
     // MARK: - Items
 
     public func insertItem(_ item: Item) async throws {
+        try await insertItem(item, on: client)
+    }
+
+    func insertItem(_ item: Item, on runner: some QueryRunner) async throws {
         let type = ClassifiedBinds(item.type) { $0.rawValue }
         let effort = ClassifiedBinds(item.effort) { $0.rawValue }
         let due = ClassifiedBinds(item.dueAt) { $0 }
         let goal = ClassifiedBinds(item.goalId) { $0.rawValue }
         let category = ClassifiedBinds(item.category) { $0.rawValue }
-        try await client.query(
+        _ = try await runner.run(
             """
             INSERT INTO items (
                 user_id, id, capture_id, title, status,
@@ -295,16 +299,26 @@ public struct UserStore: Sendable {
     /// confirmed edge whose source is not the user. **Cycles are not checked
     /// here:** that is Brain's graph code, run before calling this.
     public func insertEdge(_ edge: Edge) async throws {
+        _ = try await insertEdge(edge, on: client, skipDuplicate: false)
+    }
+
+    /// With `skipDuplicate`, an edge that already exists between the same
+    /// pair, of the same kind, is left alone and `false` is returned.
+    func insertEdge(_ edge: Edge, on runner: some QueryRunner, skipDuplicate: Bool) async throws
+        -> Bool
+    {
         let toItem: String? = edge.kind == .serves ? nil : edge.to.rawValue
         let toGoal: String? = edge.kind == .serves ? edge.to.rawValue : nil
-        try await client.query(
-            """
+        var query: PostgresQuery = """
             INSERT INTO edges (user_id, id, from_item_id, to_item_id, to_goal_id, kind,
                                confidence, source, confirmed)
             VALUES (\(uid), \(edge.id.rawValue), \(edge.from.rawValue), \(toItem), \(toGoal),
                     \(edge.kind.rawValue), \(edge.confidence), \(edge.source.rawValue),
                     \(edge.confirmed))
-            """, logger: logger)
+            """
+        query.sql += skipDuplicate ? " ON CONFLICT DO NOTHING RETURNING id" : " RETURNING id"
+        for try await _ in try await runner.run(query, logger: logger) { return true }
+        return false
     }
 
     public func edges() async throws -> [Edge] {
@@ -367,6 +381,86 @@ public struct UserStore: Sendable {
                     tier: try r.enumValue("tier"), createdAt: try r.value("created_at")))
         }
         return result
+    }
+
+    // MARK: - Enrichment
+
+    /// Takes a capture for enrichment: moves it to `enriching` and counts the
+    /// attempt. Returns nil, and changes nothing, if the capture is already
+    /// done, already has an item, or another worker is on it and has not been
+    /// stuck for longer than `stuckAfter`. That makes a duplicate job harmless.
+    public func claimCapture(_ id: ULID, now: Date, stuckAfter: TimeInterval) async throws
+        -> Capture?
+    {
+        let stuckCutoff = now.addingTimeInterval(-stuckAfter)
+        let claimed = try await returnsRow(
+            """
+            UPDATE captures c
+            SET status = 'enriching', status_changed_at = \(now),
+                enrich_attempts = enrich_attempts + 1
+            WHERE c.user_id = \(uid) AND c.id = \(id.rawValue)
+              AND (c.status IN ('raw', 'failed')
+                   OR (c.status = 'enriching' AND c.status_changed_at < \(stuckCutoff)))
+              AND NOT EXISTS (
+                  SELECT 1 FROM items i WHERE i.user_id = c.user_id AND i.capture_id = c.id)
+            RETURNING c.id
+            """)
+        return claimed ? try await capture(id) : nil
+    }
+
+    /// Everything Brain needs to rank and link: items, goals and edges.
+    /// Edges are added through `BrainGraph.addEdge`, so a stored graph that
+    /// somehow held a cycle would fail loudly here rather than be ranked.
+    public func graph() async throws -> BrainGraph {
+        var graph = BrainGraph()
+        for item in try await items() { graph.insert(item) }
+        for goal in try await goals() { graph.insert(goal) }
+        for edge in try await edges() { _ = try graph.addEdge(edge) }
+        return graph
+    }
+
+    /// Stores one enrichment atomically: the item, its suggested edges, and
+    /// the capture's new status, all or nothing.
+    ///
+    /// Returns false, and writes nothing, if the capture already has an item.
+    /// The capture row is locked first, so two workers finishing the same
+    /// capture cannot both write an item. A suggested edge that already exists
+    /// is skipped, not an error.
+    public func saveEnrichment(
+        capture: ULID, status: CaptureStatus, item: Item, edges: [Edge]
+    ) async throws -> Bool {
+        try await client.withTransaction(logger: logger) { connection in
+            var locked = false
+            for try await _ in try await connection.query(
+                """
+                SELECT id FROM captures WHERE user_id = \(uid) AND id = \(capture.rawValue)
+                FOR UPDATE
+                """, logger: logger)
+            {
+                locked = true
+            }
+            guard locked else {
+                throw StorageError.corruptRow(
+                    table: "captures", column: "id", value: capture.rawValue)
+            }
+            for try await _ in try await connection.query(
+                """
+                SELECT 1 FROM items WHERE user_id = \(uid) AND capture_id = \(capture.rawValue)
+                """, logger: logger)
+            {
+                return false
+            }
+            try await insertItem(item, on: connection)
+            for edge in edges {
+                _ = try await insertEdge(edge, on: connection, skipDuplicate: true)
+            }
+            try await connection.query(
+                """
+                UPDATE captures SET status = \(status.rawValue), status_changed_at = now()
+                WHERE user_id = \(uid) AND id = \(capture.rawValue)
+                """, logger: logger)
+            return true
+        }
     }
 
     // MARK: - Helpers

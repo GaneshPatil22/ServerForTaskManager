@@ -7,6 +7,9 @@ import OpenAPIHummingbird
 import OpenAPIRuntime
 import ServiceLifecycle
 import Storage
+import Worker
+import BrainHarness
+import BrainProduction
 
 /// Shared by the executable and the tests, so both build the same application.
 protocol AppArguments {
@@ -20,6 +23,7 @@ protocol AppArguments {
 struct Dependencies: Sendable {
     let database: Database
     let verifier: any TokenVerifying
+    let enrichment: any EnrichmentEnqueuing
     var clock: @Sendable () -> Date = { Date() }
 }
 
@@ -31,17 +35,49 @@ func buildApplication(_ arguments: some AppArguments) async throws -> some Appli
     let verifier = TokenVerifier(
         configuration: try .fromEnvironment(), fetcher: HTTPJWKSFetcher(url: try jwksURL()),
         logger: logger)
+    let enricher = Enricher(
+        database: database, router: await makeModelRouter(database: database, logger: logger),
+        logger: logger)
+    // Created before migrating, so the queue's own migrations are included.
+    let queue = await EnrichmentQueue.make(
+        database: database, enricher: enricher, logger: logger)
+    let workers = Environment().get("WORKER_CONCURRENCY").flatMap(Int.init) ?? 4
+
+    let gate = StartupGate()
     var app = Application(
-        router: try buildRouter(Dependencies(database: database, verifier: verifier)),
+        router: try buildRouter(
+            Dependencies(database: database, verifier: verifier, enrichment: queue)),
         configuration: .init(
             address: .hostname(arguments.hostname, port: arguments.port),
             serverName: "brain-server"),
-        services: [DatabaseService(database: database)],
+        services: [
+            DatabaseService(database: database),
+            AfterStartup(gate: gate, services: await queue.services(workers: workers)),
+        ],
         logger: logger)
     // Single VM, single instance: migrating on startup is safe and keeps
-    // deploys to one step. Revisit if a second instance ever runs.
-    app.beforeServerStarts { try await database.migrate() }
+    // deploys to one step. Revisit if a second instance ever runs. Nothing
+    // that touches the database runs before this finishes.
+    app.beforeServerStarts {
+        try await database.migrate()
+        await gate.open()
+    }
     return app
+}
+
+/// Brain's production ladder, live, with daily budgets kept in Postgres.
+/// Without `GOOGLE_AI_API_KEY`, enrichment runs on rules alone (T0), and says
+/// so loudly at startup rather than quietly.
+func makeModelRouter(database: Database, logger: Logger) async -> ModelRouter? {
+    guard let apiKey = Environment().get("GOOGLE_AI_API_KEY"), !apiKey.isEmpty else {
+        logger.warning("GOOGLE_AI_API_KEY not set: enrichment uses rules only (T0), no models")
+        return nil
+    }
+    for stale in ProductionRouter.staleLimits(now: Date()) {
+        logger.warning("free-tier limit not re-verified recently", metadata: ["limit": "\(stale)"])
+    }
+    let ledger = BudgetLedger(store: PostgresBudgetStore(database: database))
+    return await ProductionRouter.make(apiKey: apiKey, ledger: ledger, mode: .live)
 }
 
 private func jwksURL() throws -> String {
@@ -67,8 +103,11 @@ func buildRouter(_ dependencies: Dependencies) throws -> Router<AppRequestContex
         .ok
     }
     let api = router.group().add(middleware: AuthMiddleware(verifier: dependencies.verifier))
-    try APIHandler(database: dependencies.database, clock: dependencies.clock)
-        .registerHandlers(on: api, middlewares: [ErrorHandlingMiddleware()])
+    try APIHandler(
+        database: dependencies.database, enrichment: dependencies.enrichment,
+        clock: dependencies.clock
+    )
+    .registerHandlers(on: api, middlewares: [ErrorHandlingMiddleware()])
     return router
 }
 
