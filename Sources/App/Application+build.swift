@@ -8,8 +8,6 @@ protocol AppArguments {
     var logLevel: Logger.Level? { get }
 }
 
-typealias AppRequestContext = BasicRequestContext
-
 func buildApplication(_ arguments: some AppArguments) async throws -> some ApplicationProtocol {
     let environment = Environment()
     var logger = Logger(label: "brain-server")

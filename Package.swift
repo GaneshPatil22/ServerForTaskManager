@@ -26,6 +26,11 @@ let package = Package(
         .package(url: "https://github.com/vapor/postgres-nio.git", exact: "1.33.3"),
         .package(
             url: "https://github.com/hummingbird-project/postgres-migrations.git", exact: "1.2.0"),
+        .package(url: "https://github.com/vapor/jwt-kit.git", exact: "5.9.1"),
+        .package(url: "https://github.com/swift-server/async-http-client.git", exact: "1.37.1"),
+        // Tests only: RSA key generation for the RS256 cases. Already in the
+        // graph through jwt-kit; pinned to the version that resolves.
+        .package(url: "https://github.com/apple/swift-crypto.git", exact: "5.1.2"),
         brain,
     ],
     targets: [
@@ -39,9 +44,21 @@ let package = Package(
                 .product(name: "BrainCore", package: brainPackage),
             ]
         ),
+        // Supabase token verification (ADR-0007). No Hummingbird here: the
+        // HTTP middleware lives in App, this is just "token in, UserID out".
+        .target(
+            name: "Auth",
+            dependencies: [
+                "Storage",
+                .product(name: "JWTKit", package: "jwt-kit"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
+            ]
+        ),
         .executableTarget(
             name: "App",
             dependencies: [
+                "Auth",
+                "Storage",
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "BrainCore", package: brainPackage),
@@ -51,8 +68,18 @@ let package = Package(
             name: "AppTests",
             dependencies: [
                 "App",
+                "Auth",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
+                .product(name: "JWTKit", package: "jwt-kit"),
                 .product(name: "BrainCore", package: brainPackage),
+            ]
+        ),
+        .testTarget(
+            name: "AuthTests",
+            dependencies: [
+                "Auth",
+                .product(name: "JWTKit", package: "jwt-kit"),
+                .product(name: "CryptoExtras", package: "swift-crypto"),
             ]
         ),
         .testTarget(
