@@ -1,5 +1,5 @@
 {
-  "originHash" : "044e1dffa43189204903799d2cd04cf84afd7ca51409f59824155c8621dd7ae3",
+  "originHash" : "6ff3b0eca4b0fad1e4351e794ea563a19c5e08c2c4e2fbd6fc42887fae406393",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -17,6 +17,24 @@
       "state" : {
         "revision" : "aa61ccf3fe6e6c012823a0c08a45d79855a26ee0",
         "version" : "2.29.0"
+      }
+    },
+    {
+      "identity" : "postgres-migrations",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hummingbird-project/postgres-migrations.git",
+      "state" : {
+        "revision" : "90d8fd9e365c26c0a0f4cbe498fdf10532704419",
+        "version" : "1.2.0"
+      }
+    },
+    {
+      "identity" : "postgres-nio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/vapor/postgres-nio.git",
+      "state" : {
+        "revision" : "c7320acff7ba4034d8eb7acac2daf200855996d3",
+        "version" : "1.33.3"
       }
     },
     {

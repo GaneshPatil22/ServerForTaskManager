@@ -9,9 +9,22 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     container: swift:6.4.3-noble
+    services:
+      # Same image as docker-compose.yml. Throwaway credentials, not secrets.
+      db:
+        image: postgres:17.12-alpine
+        env:
+          POSTGRES_USER: brain
+          POSTGRES_PASSWORD: brain
+          POSTGRES_DB: brain_test
+        options: >-
+          --health-cmd "pg_isready -U brain -d brain_test"
+          --health-interval 2s --health-timeout 3s --health-retries 15
     env:
       # Resolve Brain from its pinned git tag instead of ../Brain (ADR-0003).
       BRAIN_FROM_GIT: "1"
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
     steps:
       - uses: actions/checkout@v5
 

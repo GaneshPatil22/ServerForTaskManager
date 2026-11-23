@@ -1,0 +1,370 @@
+import BrainCore
+import Foundation
+import Logging
+import PostgresNIO
+
+/// Every read and write for one user. Each query in this file filters on
+/// `user_id = self.user`. That filter, together with the composite keys in
+/// `M0001_CoreTables`, is the isolation boundary (ADR-0007).
+///
+/// Reviewing a new method here: if its SQL does not mention `\(uid)`, it is a bug.
+public struct UserStore: Sendable {
+    let client: PostgresClient
+    let logger: Logger
+    public let user: UserID
+
+    var uid: UUID { user.rawValue }
+
+    // MARK: - User
+
+    /// Creates the user row on first sight. Safe to call on every request.
+    public func ensureUser() async throws {
+        try await client.query(
+            "INSERT INTO users (id) VALUES (\(uid)) ON CONFLICT (id) DO NOTHING",
+            logger: logger)
+    }
+
+    /// IANA timezone. "Today" is always computed in it, never the server's.
+    public func timezone() async throws -> String? {
+        let rows = try await client.query(
+            "SELECT timezone FROM users WHERE id = \(uid)", logger: logger)
+        for try await (timezone) in rows.decode(String.self) { return timezone }
+        return nil
+    }
+
+    // MARK: - Captures
+
+    /// Idempotent. A retry with the same `idempotencyKey`, or the same id,
+    /// returns the row already stored and `created == false`. The stored row
+    /// wins over the incoming one: captures are never edited.
+    public func insertCapture(_ capture: Capture) async throws -> (capture: Capture, created: Bool)
+    {
+        let rows = try await client.query(
+            """
+            INSERT INTO captures (user_id, id, raw_text, source, status, idempotency_key, created_at)
+            VALUES (\(uid), \(capture.id.rawValue), \(capture.rawText), \(capture.source.rawValue),
+                    \(capture.status.rawValue), \(capture.idempotencyKey), \(capture.createdAt))
+            ON CONFLICT DO NOTHING
+            RETURNING id
+            """, logger: logger)
+        var created = false
+        for try await _ in rows { created = true }
+        if created { return (capture, true) }
+
+        if let key = capture.idempotencyKey,
+            let existing = try await captures(idempotencyKey: key).first
+        {
+            return (existing, false)
+        }
+        if let existing = try await self.capture(capture.id) { return (existing, false) }
+        // Unreachable unless a row vanished, which the delete trigger forbids.
+        throw StorageError.corruptRow(
+            table: "captures", column: "id", value: capture.id.rawValue)
+    }
+
+    public func capture(_ id: ULID) async throws -> Capture? {
+        try await captures(id: id).first
+    }
+
+    /// Oldest first. ULIDs sort by creation time.
+    public func captures() async throws -> [Capture] {
+        try await captures(id: nil)
+    }
+
+    /// Returns false if no such capture exists for this user.
+    @discardableResult
+    public func setCaptureStatus(_ id: ULID, _ status: CaptureStatus) async throws -> Bool {
+        try await returnsRow(
+            """
+            UPDATE captures SET status = \(status.rawValue)
+            WHERE user_id = \(uid) AND id = \(id.rawValue) RETURNING id
+            """)
+    }
+
+    /// A nil filter matches everything; the user filter is always applied.
+    private func captures(id: ULID? = nil, idempotencyKey key: String? = nil) async throws
+        -> [Capture]
+    {
+        let id = id?.rawValue
+        let query: PostgresQuery = """
+            SELECT id, raw_text, source, status, idempotency_key, created_at
+            FROM captures
+            WHERE user_id = \(uid)
+              AND (\(id)::text IS NULL OR id = \(id)::text)
+              AND (\(key)::text IS NULL OR idempotency_key = \(key)::text)
+            ORDER BY id
+            """
+        var result: [Capture] = []
+        for try await row in try await client.query(query, logger: logger) {
+            let r = RowReader(row: row.makeRandomAccess(), table: "captures")
+            result.append(
+                Capture(
+                    id: try r.ulid("id"), rawText: try r.value("raw_text"),
+                    source: try r.enumValue("source"), createdAt: try r.value("created_at"),
+                    status: try r.enumValue("status"),
+                    idempotencyKey: try r.value("idempotency_key", as: String?.self)))
+        }
+        return result
+    }
+
+    // MARK: - Goals
+
+    public func insertGoal(_ goal: Goal) async throws {
+        try await client.query(
+            """
+            INSERT INTO goals (user_id, id, title, status, created_at)
+            VALUES (\(uid), \(goal.id.rawValue), \(goal.title), \(goal.status.rawValue),
+                    \(goal.createdAt))
+            """, logger: logger)
+    }
+
+    public func goals() async throws -> [Goal] {
+        var result: [Goal] = []
+        let rows = try await client.query(
+            "SELECT id, title, status, created_at FROM goals WHERE user_id = \(uid) ORDER BY id",
+            logger: logger)
+        for try await row in rows {
+            let r = RowReader(row: row.makeRandomAccess(), table: "goals")
+            result.append(
+                Goal(
+                    id: try r.ulid("id"), title: try r.value("title"),
+                    status: try r.enumValue("status"), createdAt: try r.value("created_at")))
+        }
+        return result
+    }
+
+    // MARK: - Items
+
+    public func insertItem(_ item: Item) async throws {
+        let type = ClassifiedBinds(item.type) { $0.rawValue }
+        let effort = ClassifiedBinds(item.effort) { $0.rawValue }
+        let due = ClassifiedBinds(item.dueAt) { $0 }
+        let goal = ClassifiedBinds(item.goalId) { $0.rawValue }
+        let category = ClassifiedBinds(item.category) { $0.rawValue }
+        try await client.query(
+            """
+            INSERT INTO items (
+                user_id, id, capture_id, title, status,
+                type, type_confidence, type_tier, type_evidence_start, type_evidence_end,
+                effort, effort_confidence, effort_tier, effort_evidence_start, effort_evidence_end,
+                due_at, due_at_confidence, due_at_tier, due_at_evidence_start, due_at_evidence_end,
+                goal_id, goal_id_confidence, goal_id_tier, goal_id_evidence_start,
+                goal_id_evidence_end,
+                category, category_confidence, category_tier, category_evidence_start,
+                category_evidence_end,
+                created_at, updated_at)
+            VALUES (
+                \(uid), \(item.id.rawValue), \(item.captureId?.rawValue), \(item.title),
+                \(item.status.rawValue),
+                \(type.value), \(type.confidence), \(type.tier), \(type.start), \(type.end),
+                \(effort.value), \(effort.confidence), \(effort.tier), \(effort.start),
+                \(effort.end),
+                \(due.value), \(due.confidence), \(due.tier), \(due.start), \(due.end),
+                \(goal.value), \(goal.confidence), \(goal.tier), \(goal.start), \(goal.end),
+                \(category.value), \(category.confidence), \(category.tier), \(category.start),
+                \(category.end),
+                \(item.createdAt), \(item.updatedAt))
+            """, logger: logger)
+    }
+
+    public func item(_ id: ULID) async throws -> Item? {
+        try await items(id: id).first
+    }
+
+    public func items() async throws -> [Item] {
+        try await items(id: nil)
+    }
+
+    @discardableResult
+    public func setItemStatus(_ id: ULID, _ status: ItemStatus, at date: Date) async throws -> Bool
+    {
+        try await returnsRow(
+            """
+            UPDATE items SET status = \(status.rawValue), updated_at = \(date)
+            WHERE user_id = \(uid) AND id = \(id.rawValue) RETURNING id
+            """)
+    }
+
+    private func items(id: ULID?) async throws -> [Item] {
+        let id = id?.rawValue
+        let query: PostgresQuery = """
+            SELECT * FROM items
+            WHERE user_id = \(uid) AND (\(id)::text IS NULL OR id = \(id)::text)
+            ORDER BY id
+            """
+        var result: [Item] = []
+        for try await row in try await client.query(query, logger: logger) {
+            let r = RowReader(row: row.makeRandomAccess(), table: "items")
+            result.append(
+                Item(
+                    id: try r.ulid("id"),
+                    captureId: try r.value("capture_id", as: String?.self).map {
+                        try r.parse($0, column: "capture_id", ULID.init)
+                    },
+                    title: try r.value("title"),
+                    type: try r.classified("type", as: String.self) { ItemType(rawValue: $0) },
+                    status: try r.enumValue("status"),
+                    effort: try r.classified("effort", as: String.self) {
+                        EffortBucket(rawValue: $0)
+                    },
+                    dueAt: try r.classified("due_at", as: Date.self) { $0 },
+                    goalId: try r.classified("goal_id", as: String.self) { ULID($0) },
+                    // Always passed, never nil: nil would make Brain re-derive it
+                    // from the title instead of returning what was stored.
+                    category: try r.classified("category", as: String.self) {
+                        TaskCategory(rawValue: $0)
+                    },
+                    createdAt: try r.value("created_at"),
+                    updatedAt: try r.value("updated_at", as: Date.self)))
+        }
+        return result
+    }
+
+    // MARK: - Edges
+
+    /// The database rejects an edge whose endpoints belong to another user, a
+    /// `serves` edge that does not point at a goal, a self-loop, and a
+    /// confirmed edge whose source is not the user. **Cycles are not checked
+    /// here:** that is Brain's graph code, run before calling this.
+    public func insertEdge(_ edge: Edge) async throws {
+        let toItem: String? = edge.kind == .serves ? nil : edge.to.rawValue
+        let toGoal: String? = edge.kind == .serves ? edge.to.rawValue : nil
+        try await client.query(
+            """
+            INSERT INTO edges (user_id, id, from_item_id, to_item_id, to_goal_id, kind,
+                               confidence, source, confirmed)
+            VALUES (\(uid), \(edge.id.rawValue), \(edge.from.rawValue), \(toItem), \(toGoal),
+                    \(edge.kind.rawValue), \(edge.confidence), \(edge.source.rawValue),
+                    \(edge.confirmed))
+            """, logger: logger)
+    }
+
+    public func edges() async throws -> [Edge] {
+        var result: [Edge] = []
+        let rows = try await client.query(
+            """
+            SELECT id, from_item_id, coalesce(to_item_id, to_goal_id) AS to_id, kind,
+                   confidence, source, confirmed
+            FROM edges WHERE user_id = \(uid) ORDER BY id
+            """, logger: logger)
+        for try await row in rows {
+            let r = RowReader(row: row.makeRandomAccess(), table: "edges")
+            result.append(
+                Edge(
+                    id: try r.ulid("id"), from: try r.ulid("from_item_id"), to: try r.ulid("to_id"),
+                    kind: try r.enumValue("kind"), confidence: try r.value("confidence"),
+                    source: try r.enumValue("source"), confirmed: try r.value("confirmed")))
+        }
+        return result
+    }
+
+    /// The user confirms an edge, which makes them its source (invariant 3).
+    @discardableResult
+    public func confirmEdge(_ id: ULID) async throws -> Bool {
+        try await returnsRow(
+            """
+            UPDATE edges SET confirmed = true, source = 'user'
+            WHERE user_id = \(uid) AND id = \(id.rawValue) RETURNING id
+            """)
+    }
+
+    // MARK: - Corrections
+
+    public func insertCorrection(_ correction: Correction) async throws {
+        try await client.query(
+            """
+            INSERT INTO corrections (user_id, id, target_id, field, before_value, after_value,
+                                     tier, created_at)
+            VALUES (\(uid), \(correction.id.rawValue), \(correction.targetId.rawValue),
+                    \(correction.field), \(correction.beforeValue), \(correction.afterValue),
+                    \(correction.tier.rawValue), \(correction.createdAt))
+            """, logger: logger)
+    }
+
+    public func corrections() async throws -> [Correction] {
+        var result: [Correction] = []
+        let rows = try await client.query(
+            """
+            SELECT id, target_id, field, before_value, after_value, tier, created_at
+            FROM corrections WHERE user_id = \(uid) ORDER BY id
+            """, logger: logger)
+        for try await row in rows {
+            let r = RowReader(row: row.makeRandomAccess(), table: "corrections")
+            result.append(
+                Correction(
+                    id: try r.ulid("id"), targetId: try r.ulid("target_id"),
+                    field: try r.value("field"),
+                    beforeValue: try r.value("before_value", as: String?.self),
+                    afterValue: try r.value("after_value", as: String?.self),
+                    tier: try r.enumValue("tier"), createdAt: try r.value("created_at")))
+        }
+        return result
+    }
+
+    // MARK: - Helpers
+
+    private func returnsRow(_ query: PostgresQuery) async throws -> Bool {
+        for try await _ in try await client.query(query, logger: logger) { return true }
+        return false
+    }
+}
+
+/// A `Classified<T>` flattened into the five columns `M0001` stores it in.
+struct ClassifiedBinds<Raw: PostgresEncodable & Sendable>: Sendable {
+    let value: Raw?
+    let confidence: Double
+    let tier: String
+    let start: Int?
+    let end: Int?
+
+    init<Value>(_ classified: Classified<Value>, _ raw: (Value) -> Raw) {
+        value = classified.value.map(raw)
+        confidence = classified.confidence
+        tier = classified.tier.rawValue
+        start = classified.evidence?.start
+        end = classified.evidence?.end
+    }
+}
+
+/// Decodes columns by name and turns unparseable values into `corruptRow`.
+struct RowReader {
+    let row: PostgresRandomAccessRow
+    let table: String
+
+    func value<T: PostgresDecodable>(_ column: String, as: T.Type = T.self) throws -> T {
+        try row[column].decode(T.self)
+    }
+
+    func parse<T>(_ raw: String, column: String, _ make: (String) -> T?) throws -> T {
+        guard let parsed = make(raw) else {
+            throw StorageError.corruptRow(table: table, column: column, value: raw)
+        }
+        return parsed
+    }
+
+    func ulid(_ column: String) throws -> ULID {
+        try parse(try value(column, as: String.self), column: column, ULID.init)
+    }
+
+    func enumValue<T: RawRepresentable>(_ column: String) throws -> T where T.RawValue == String {
+        try parse(try value(column, as: String.self), column: column, T.init(rawValue:))
+    }
+
+    func classified<Raw: PostgresDecodable, Value: Sendable & Hashable>(
+        _ name: String, as: Raw.Type, _ make: (Raw) -> Value?
+    ) throws -> Classified<Value> where Raw._DecodableType == Raw {
+        let value: Value? = try self.value(name, as: Raw?.self).map { raw in
+            guard let parsed = make(raw) else {
+                throw StorageError.corruptRow(table: table, column: name, value: "\(raw)")
+            }
+            return parsed
+        }
+        let tier: Tier = try enumValue("\(name)_tier")
+        let start = try self.value("\(name)_evidence_start", as: Int?.self)
+        let end = try self.value("\(name)_evidence_end", as: Int?.self)
+        let evidence = start.flatMap { s in end.map { Span(start: s, end: $0) } }
+        return Classified(
+            value, confidence: try self.value("\(name)_confidence"), tier: tier,
+            evidence: evidence)
+    }
+}

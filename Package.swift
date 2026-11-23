@@ -23,9 +23,22 @@ let package = Package(
         // Versions verified against GitHub release tags on 2026-11-24.
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", exact: "2.29.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", exact: "1.8.2"),
+        .package(url: "https://github.com/vapor/postgres-nio.git", exact: "1.33.3"),
+        .package(
+            url: "https://github.com/hummingbird-project/postgres-migrations.git", exact: "1.2.0"),
         brain,
     ],
     targets: [
+        // The only module that talks to Postgres. Its connection is internal:
+        // the rest of the server can only reach data through a UserID scope.
+        .target(
+            name: "Storage",
+            dependencies: [
+                .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "PostgresMigrations", package: "postgres-migrations"),
+                .product(name: "BrainCore", package: brainPackage),
+            ]
+        ),
         .executableTarget(
             name: "App",
             dependencies: [
@@ -39,6 +52,14 @@ let package = Package(
             dependencies: [
                 "App",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
+                .product(name: "BrainCore", package: brainPackage),
+            ]
+        ),
+        .testTarget(
+            name: "StorageTests",
+            dependencies: [
+                "Storage",
+                .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "BrainCore", package: brainPackage),
             ]
         ),

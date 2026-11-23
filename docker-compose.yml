@@ -1,0 +1,22 @@
+# Local Postgres for development and tests. Pinned to the major version
+# Supabase runs (17). Port 54329 avoids clashing with any other Postgres.
+services:
+  db:
+    image: postgres:17.12-alpine
+    environment:
+      POSTGRES_USER: brain
+      POSTGRES_PASSWORD: brain   # local-only throwaway password, not a secret
+      POSTGRES_DB: brain_dev
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - ./scripts/create-test-db.sql:/docker-entrypoint-initdb.d/create-test-db.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brain -d brain_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:
