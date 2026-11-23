@@ -328,3 +328,9 @@ Checked in `_hb_pg_migrations` that each was applied exactly once.
 - Budget exhaustion makes Brain degrade to T0 and still mark the capture
   `enriched`. It isn't retried for a better answer the next day. That's
   Brain's design; noted in case it matters later.
+
+### 2026-11-24 — Questions (T3) fold into S5
+Agreed with Ganesh. Nothing produces questions today: `classifyType` never
+routes to T3. Their storage and endpoints get built in S5, alongside
+`judgeLink`, which is what will ask them. Until then, `listQuestions` and
+`answerQuestion` keep answering 501.
