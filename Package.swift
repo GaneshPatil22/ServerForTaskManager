@@ -27,6 +27,8 @@ let package = Package(
         .package(
             url: "https://github.com/hummingbird-project/postgres-migrations.git", exact: "1.2.0"),
         .package(url: "https://github.com/vapor/jwt-kit.git", exact: "5.9.1"),
+        .package(url: "https://github.com/apple/swift-openapi-generator.git", exact: "1.14.4"),
+        .package(url: "https://github.com/apple/swift-openapi-runtime.git", exact: "1.13.4"),
         .package(url: "https://github.com/swift-server/async-http-client.git", exact: "1.37.1"),
         // Tests only: RSA key generation for the RS256 cases. Already in the
         // graph through jwt-kit; pinned to the version that resolves.
@@ -43,6 +45,15 @@ let package = Package(
                 .product(name: "PostgresMigrations", package: "postgres-migrations"),
                 .product(name: "BrainCore", package: brainPackage),
             ]
+        ),
+        // The HTTP contract. `openapi.yaml` is the source of truth; types and
+        // the server protocol are generated from it at build time.
+        .target(
+            name: "API",
+            dependencies: [
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
+            ],
+            plugins: [.plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")]
         ),
         // Supabase token verification (ADR-0007). No Hummingbird here: the
         // HTTP middleware lives in App, this is just "token in, UserID out".

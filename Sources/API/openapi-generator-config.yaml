@@ -1,0 +1,7 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/apple/swift-openapi-generator/main/Public/openapi-generator-config.schema.json
+generate:
+  - types
+  - server
+# Visible to App (same package), not to anyone else.
+accessModifier: package
+namingStrategy: idiomatic

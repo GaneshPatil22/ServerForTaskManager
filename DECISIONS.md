@@ -141,3 +141,41 @@ token end to end.
 ### 2026-11-24 — Anonymous Supabase users stay refused
 Confirmed by Ganesh. `allowAnonymous = false` is the decision, not just a
 default.
+
+### 2026-11-24 — S3a: API contract, spec first
+
+`Sources/API/openapi.yaml` (OpenAPI 3.1) is the source of truth. It is
+generated and compiled by swift-openapi-generator 1.14.4 and runtime 1.13.4,
+which proves the spec is valid and the generator accepts it. That gives 18
+operations in `APIProtocol`. No handlers yet: this is the review gate.
+swift-openapi-hummingbird 2.1.0, now under `hummingbird-project`, is added
+in S3b when handlers exist.
+
+**The generator does not enforce `pattern`, `minimum`, `maxLength` or
+`maxItems`.** Its own feature list (`Supported-OpenAPI-features.md` at 1.14.4)
+marks them unsupported. The spec states them for clients, but every handler
+must check them in code: ULID format, text length, page limit. A test per rule.
+
+**Contract decisions to review:**
+1. **The client generates capture ids** (ULIDs). The id is the idempotency
+   key: resending it returns the stored capture with 200. No separate
+   `Idempotency-Key` header.
+2. **`capturedAt` comes from the client** (offline phones), and a future time
+   is replaced by the server's. A capture is never refused for its timestamp.
+   Refusing one risks losing it on the client.
+3. **Capture text is capped at 20,000 characters.** About 330 lines of 60
+   characters. Longer pastes need splitting by the client.
+4. **Another user's id gives 404, never 403**, so ids cannot be probed.
+5. **One `/v1/plan` call** returns next, ranked, quick wins and blocked in one
+   compute pass and one round trip, instead of four endpoints.
+6. **Clearing a field** (e.g. removing a due date) is not in v1's `ItemUpdate`.
+7. **No delete endpoints at all.** Captures are append-only; items end
+   through `status`. Account deletion (the DPDP open point from S1) stays open.
+
+**Needs a schema change later:** rejecting a suggested edge must stop it from
+being suggested again. The current `edges` table cannot record a rejection.
+That is migration M0002, in S5.
+
+**Build order inside the steps:** S3b implements me, captures, items (read),
+goals. S4 adds questions and the enrichment that fills items. S5 adds plan,
+edges and item edits with corrections.

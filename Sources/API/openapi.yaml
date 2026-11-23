@@ -1,0 +1,534 @@
+openapi: '3.1.0'
+info:
+  title: Brain API
+  version: 1.0.0
+  description: |
+    Dump anything. It organises it, finds what depends on what, and tells you
+    the one thing to do next.
+
+    **Rules every endpoint follows**
+
+    - Every request needs a Supabase access token (`Authorization: Bearer`).
+      401 for a missing or bad token; 503 if the server cannot reach
+      Supabase's keys, so apps should retry, not log the user out.
+    - Ids belonging to another user behave exactly like ids that do not
+      exist: **404, never 403**, so ids cannot be probed.
+    - The client generates ids (ULIDs) for what it creates. Sending the same
+      create twice is safe: the second call returns what is stored with 200.
+    - Captures are never deleted or edited. Items are finished or dropped
+      through `status`.
+    - Every classified field says who decided it (`decidedBy`), so the app can
+      show "suggested" differently from "you said".
+
+    Each operation names the build step that implements it (S3, S4, S5).
+servers:
+  - url: /
+security:
+  - supabase: []
+
+paths:
+  /v1/me:
+    get:
+      operationId: getMe
+      summary: The signed-in user. Created on first call. (S3)
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Me'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      operationId: updateMe
+      summary: Change the user's timezone. "Today" is computed in it. (S3)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/MeUpdate'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Me'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/captures:
+    post:
+      operationId: createCapture
+      summary: Dump anything. Stored before the response is sent. (S3)
+      description: |
+        The capture is committed to the database before this returns, and is
+        never lost after that, whatever happens to enrichment. Enrichment
+        runs in the background (S4); the capture starts as `raw`.
+
+        Retrying with the same `id` returns the stored capture with 200, even
+        if the retry's text differs: captures are never edited.
+
+        `capturedAt` is when the user typed it, which may be long before an
+        offline phone syncs. A time in the future is replaced by the server's
+        time. A capture is never refused for its timestamp.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/NewCapture'}}}
+      responses:
+        '201': {description: Stored., content: {application/json: {schema: {$ref: '#/components/schemas/Capture'}}}}
+        '200': {description: Already stored by an earlier call with this id., content: {application/json: {schema: {$ref: '#/components/schemas/Capture'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    get:
+      operationId: listCaptures
+      summary: Captures, oldest first. (S3)
+      parameters:
+        - {$ref: '#/components/parameters/After'}
+        - {$ref: '#/components/parameters/Limit'}
+        - name: status
+          in: query
+          schema: {$ref: '#/components/schemas/CaptureStatus'}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/CapturePage'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/captures/{id}:
+    get:
+      operationId: getCapture
+      summary: One capture. (S3)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Capture'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/items:
+    get:
+      operationId: listItems
+      summary: Items, oldest first. (S3)
+      parameters:
+        - {$ref: '#/components/parameters/After'}
+        - {$ref: '#/components/parameters/Limit'}
+        - name: status
+          in: query
+          schema: {$ref: '#/components/schemas/ItemStatus'}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/ItemPage'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/items/{id}:
+    get:
+      operationId: getItem
+      summary: One item. (S3)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      operationId: updateItem
+      summary: The user changes an item. Each change is recorded as a correction. (S5)
+      description: |
+        Every field changed here is set with `decidedBy: user`, and a
+        correction is recorded against whichever tier had decided it. Those
+        corrections are what personalisation learns from (Brain B6).
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ItemUpdate'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/goals:
+    get:
+      operationId: listGoals
+      summary: All goals. (S3)
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/GoalList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      operationId: createGoal
+      summary: Goals are only ever created by the user, never invented. (S3)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/NewGoal'}}}
+      responses:
+        '201': {description: Created., content: {application/json: {schema: {$ref: '#/components/schemas/Goal'}}}}
+        '200': {description: Already created with this id., content: {application/json: {schema: {$ref: '#/components/schemas/Goal'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/goals/{id}:
+    patch:
+      operationId: updateGoal
+      summary: Rename a goal or change its status. (S3)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/GoalUpdate'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Goal'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/plan:
+    get:
+      operationId: getPlan
+      summary: The one thing to do next, and everything behind it. (S5)
+      description: |
+        Computed by Brain's deterministic scoring from the user's graph, in
+        the user's timezone. No model takes part.
+
+        `next` is the top item that can be started now, and is absent when
+        nothing can. A blocked item may still rank first in `ranked`, with
+        its blockers listed in `blocked`.
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Plan'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/edges:
+    get:
+      operationId: listEdges
+      summary: Links between items. Unconfirmed ones are suggestions. (S5)
+      parameters:
+        - name: confirmed
+          in: query
+          schema: {type: boolean}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/EdgeList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      operationId: createEdge
+      summary: The user links two items. Confirmed from the start. (S5)
+      description: A `blocks` link that would create a cycle is refused with 409.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/NewEdge'}}}
+      responses:
+        '201': {description: Created., content: {application/json: {schema: {$ref: '#/components/schemas/Edge'}}}}
+        '200': {description: Already created with this id., content: {application/json: {schema: {$ref: '#/components/schemas/Edge'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/edges/{id}/confirm:
+    post:
+      operationId: confirmEdge
+      summary: Accept a suggested link. (S5)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Edge'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/edges/{id}/reject:
+    post:
+      operationId: rejectEdge
+      summary: Turn down a suggested link. It is not suggested again. (S5)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '204': {description: Rejected.}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/questions:
+    get:
+      operationId: listQuestions
+      summary: Questions Brain asks instead of guessing (tier T3). (S4)
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/QuestionList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/questions/{id}/answer:
+    post:
+      operationId: answerQuestion
+      summary: Answer with one of the offered options. (S4)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Answer'}}}
+      responses:
+        '204': {description: Answered.}
+        default: {$ref: '#/components/responses/Problem'}
+
+components:
+  securitySchemes:
+    supabase:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: A Supabase access token, ES256 or RS256. Anonymous users are refused.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/ULID'}
+    After:
+      name: after
+      in: query
+      description: Return rows after this id. Use `nextCursor` from the previous page.
+      schema: {$ref: '#/components/schemas/ULID'}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+
+  responses:
+    Problem:
+      description: |
+        400 invalid input · 401 bad token · 404 not found (or not yours) ·
+        409 conflict, e.g. a cycle · 503 try again later
+      content: {application/json: {schema: {$ref: '#/components/schemas/Problem'}}}
+
+  schemas:
+    ULID:
+      type: string
+      description: Crockford base32, 26 characters, sorts by creation time.
+      pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+      example: 01JDQ5Z8X3V7K2M9N4P6R8T0W1
+
+    Problem:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string, description: 'Stable, machine-readable, e.g. `cycle`, `invalid_timezone`.'}
+        message: {type: string, description: For people. Never contains another user's data.}
+
+    DecidedBy:
+      type: string
+      description: |
+        Who set a value: `t0` rules, `t1` our own model, `t2` a global model,
+        `t3` the user answering a question, `user` the user directly.
+      enum: [t0, t1, t2, t3, user]
+
+    Span:
+      type: object
+      description: Characters of the capture text the value came from.
+      required: [start, end]
+      properties:
+        start: {type: integer, minimum: 0}
+        end: {type: integer, minimum: 0}
+
+    # A Classified<T> per value type. `value` absent means "unknown", which
+    # is always legal and never an error.
+    ClassifiedItemType:
+      type: object
+      required: [confidence, decidedBy]
+      properties:
+        value: {$ref: '#/components/schemas/ItemType'}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        decidedBy: {$ref: '#/components/schemas/DecidedBy'}
+        evidence: {$ref: '#/components/schemas/Span'}
+    ClassifiedEffort:
+      type: object
+      required: [confidence, decidedBy]
+      properties:
+        value: {$ref: '#/components/schemas/Effort'}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        decidedBy: {$ref: '#/components/schemas/DecidedBy'}
+        evidence: {$ref: '#/components/schemas/Span'}
+    ClassifiedDate:
+      type: object
+      required: [confidence, decidedBy]
+      properties:
+        value: {type: string, format: date-time}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        decidedBy: {$ref: '#/components/schemas/DecidedBy'}
+        evidence: {$ref: '#/components/schemas/Span'}
+    ClassifiedGoal:
+      type: object
+      required: [confidence, decidedBy]
+      properties:
+        value: {$ref: '#/components/schemas/ULID'}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        decidedBy: {$ref: '#/components/schemas/DecidedBy'}
+        evidence: {$ref: '#/components/schemas/Span'}
+    ClassifiedCategory:
+      type: object
+      required: [confidence, decidedBy]
+      properties:
+        value: {$ref: '#/components/schemas/Category'}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        decidedBy: {$ref: '#/components/schemas/DecidedBy'}
+        evidence: {$ref: '#/components/schemas/Span'}
+
+    Me:
+      type: object
+      required: [userId, timezone]
+      properties:
+        userId: {type: string, format: uuid}
+        timezone: {type: string, description: IANA name., example: Asia/Kolkata}
+    MeUpdate:
+      type: object
+      required: [timezone]
+      properties:
+        timezone: {type: string, description: 'IANA name. Unknown names are refused with 400.'}
+
+    CaptureSource: {type: string, enum: [text, voice, image, share]}
+    CaptureStatus:
+      type: string
+      description: '`failed` is always retried; it never means lost.'
+      enum: [raw, enriching, enriched, failed]
+    NewCapture:
+      type: object
+      required: [id, text]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        text: {type: string, minLength: 1, maxLength: 20000}
+        source: {$ref: '#/components/schemas/CaptureSource'}
+        capturedAt: {type: string, format: date-time, description: Defaults to the server's time.}
+    Capture:
+      type: object
+      required: [id, text, source, status, capturedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        text: {type: string}
+        source: {$ref: '#/components/schemas/CaptureSource'}
+        status: {$ref: '#/components/schemas/CaptureStatus'}
+        capturedAt: {type: string, format: date-time}
+    CapturePage:
+      type: object
+      required: [captures]
+      properties:
+        captures: {type: array, items: {$ref: '#/components/schemas/Capture'}}
+        nextCursor: {$ref: '#/components/schemas/ULID'}
+
+    ItemType: {type: string, enum: [task, idea, note, reminder, link]}
+    ItemStatus: {type: string, enum: [open, done, dropped]}
+    Effort:
+      type: string
+      description: 'Roughly 5, 20, 60, 240, 960 minutes. `unknown` scores as medium.'
+      enum: [tiny, small, medium, large, xlarge, unknown]
+    Category:
+      type: string
+      enum: [paperwork, errands, communication, planning, deepWork, chores, money, learning, health]
+    Item:
+      type: object
+      required: [id, title, status, type, effort, dueAt, goal, category, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        captureId: {$ref: '#/components/schemas/ULID'}
+        title: {type: string}
+        status: {$ref: '#/components/schemas/ItemStatus'}
+        type: {$ref: '#/components/schemas/ClassifiedItemType'}
+        effort: {$ref: '#/components/schemas/ClassifiedEffort'}
+        dueAt: {$ref: '#/components/schemas/ClassifiedDate'}
+        goal: {$ref: '#/components/schemas/ClassifiedGoal'}
+        category: {$ref: '#/components/schemas/ClassifiedCategory'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ItemUpdate:
+      type: object
+      description: Only the fields sent are changed. Clearing a value is not supported in v1.
+      properties:
+        title: {type: string, minLength: 1, maxLength: 500}
+        status: {$ref: '#/components/schemas/ItemStatus'}
+        type: {$ref: '#/components/schemas/ItemType'}
+        effort: {$ref: '#/components/schemas/Effort'}
+        dueAt: {type: string, format: date-time}
+        goalId: {$ref: '#/components/schemas/ULID'}
+        category: {$ref: '#/components/schemas/Category'}
+    ItemPage:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Item'}}
+        nextCursor: {$ref: '#/components/schemas/ULID'}
+
+    GoalStatus: {type: string, enum: [active, achieved, abandoned]}
+    NewGoal:
+      type: object
+      required: [id, title]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        title: {type: string, minLength: 1, maxLength: 500}
+    GoalUpdate:
+      type: object
+      properties:
+        title: {type: string, minLength: 1, maxLength: 500}
+        status: {$ref: '#/components/schemas/GoalStatus'}
+    Goal:
+      type: object
+      required: [id, title, status, createdAt]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        title: {type: string}
+        status: {$ref: '#/components/schemas/GoalStatus'}
+        createdAt: {type: string, format: date-time}
+    GoalList:
+      type: object
+      required: [goals]
+      properties:
+        goals: {type: array, items: {$ref: '#/components/schemas/Goal'}}
+
+    EdgeKind:
+      type: string
+      description: |
+        `blocks`: the second item cannot start until the first is done.
+        `relates`: navigational only. `duplicate`: the same thing twice.
+        `serves`: an item contributes to a goal (`to` is a goal id).
+      enum: [blocks, relates, duplicate, serves]
+    EdgeSuggestedBy:
+      type: string
+      description: '`t0Rule` rules, `t1Model` our model, `t2Model` a global model, `user` the user.'
+      enum: [t0Rule, t1Model, t2Model, user]
+    NewEdge:
+      type: object
+      required: [id, from, to, kind]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        from: {$ref: '#/components/schemas/ULID'}
+        to: {$ref: '#/components/schemas/ULID'}
+        kind: {$ref: '#/components/schemas/EdgeKind'}
+    Edge:
+      type: object
+      required: [id, from, to, kind, confidence, suggestedBy, confirmed]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        from: {$ref: '#/components/schemas/ULID'}
+        to: {$ref: '#/components/schemas/ULID'}
+        kind: {$ref: '#/components/schemas/EdgeKind'}
+        confidence: {type: number, minimum: 0, maximum: 1}
+        suggestedBy: {$ref: '#/components/schemas/EdgeSuggestedBy'}
+        confirmed: {type: boolean, description: Only ever true when the user confirmed it.}
+    EdgeList:
+      type: object
+      required: [edges]
+      properties:
+        edges: {type: array, items: {$ref: '#/components/schemas/Edge'}}
+
+    Why:
+      type: object
+      description: The numbers behind a ranking, from Brain's scoring.
+      required: [unblocks, mayUnblock, servesGoals, mayServeGoals, duePressure]
+      properties:
+        unblocks: {type: integer, description: Items it unblocks through confirmed links.}
+        mayUnblock: {type: integer, description: More it may unblock through suggested links.}
+        servesGoals: {type: integer}
+        mayServeGoals: {type: integer}
+        duePressure: {type: number, minimum: 0}
+    RankedItem:
+      type: object
+      required: [item, reason, why]
+      properties:
+        item: {$ref: '#/components/schemas/Item'}
+        reason: {type: string, description: 'One line for the user, built from facts, never by a model.'}
+        why: {$ref: '#/components/schemas/Why'}
+    BlockedItem:
+      type: object
+      required: [item, blockedBy]
+      properties:
+        item: {$ref: '#/components/schemas/Item'}
+        blockedBy: {type: array, items: {$ref: '#/components/schemas/ULID'}, description: Open items that must finish first.}
+    Plan:
+      type: object
+      required: [ranked, quickWins, blocked, computedAt]
+      properties:
+        next: {$ref: '#/components/schemas/RankedItem'}
+        ranked: {type: array, items: {$ref: '#/components/schemas/RankedItem'}}
+        quickWins: {type: array, items: {$ref: '#/components/schemas/RankedItem'}}
+        blocked: {type: array, items: {$ref: '#/components/schemas/BlockedItem'}}
+        computedAt: {type: string, format: date-time}
+
+    Question:
+      type: object
+      required: [id, captureId, field, prompt, options]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        captureId: {$ref: '#/components/schemas/ULID'}
+        itemId: {$ref: '#/components/schemas/ULID'}
+        field: {type: string, description: 'What the answer sets, e.g. `type`.'}
+        prompt: {type: string}
+        options: {type: array, minItems: 2, items: {type: string}}
+    QuestionList:
+      type: object
+      required: [questions]
+      properties:
+        questions: {type: array, items: {$ref: '#/components/schemas/Question'}}
+    Answer:
+      type: object
+      required: [option]
+      properties:
+        option: {type: string, description: One of the question's `options`, exactly.}
