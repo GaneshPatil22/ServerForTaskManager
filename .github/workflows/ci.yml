@@ -1,0 +1,22 @@
+# Manual trigger only: nothing runs on push or PR. See Brain ADR-0006.
+# Run from the Actions tab, or:  gh workflow run ci.yml
+name: CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    container: swift:6.4.3-noble
+    env:
+      # Resolve Brain from its pinned git tag instead of ../Brain (ADR-0003).
+      BRAIN_FROM_GIT: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Lint
+        run: make lint
+
+      - name: Test
+        run: make test
