@@ -284,8 +284,38 @@ struct APIHandler: APIProtocol {
         -> Operations.UpdateItem.Output
     { .default(statusCode: 501, Stop.notYet.problem) }
 
+    // MARK: - Plan
+
+    /// Brain's deterministic ranking of the user's own graph, in their
+    /// timezone. No model takes part (`Brain.compute`).
     func getPlan(_ input: Operations.GetPlan.Input) async throws -> Operations.GetPlan.Output {
-        .default(statusCode: 501, Stop.notYet.problem)
+        try await run(
+            {
+                let store = try await store()
+                let now = clock()
+                let outputs = BrainCore.Brain.compute(
+                    graph: try await store.graph(), now: now,
+                    calendar: try await calendar(for: store))
+                return .ok(
+                    .init(
+                        body: .json(
+                            .init(
+                                next: outputs.next.map(Components.Schemas.RankedItem.init),
+                                ranked: outputs.ranked.map(Components.Schemas.RankedItem.init),
+                                quickWins: outputs.quickWins.map(
+                                    Components.Schemas.RankedItem.init),
+                                blocked: outputs.blocked.map(Components.Schemas.BlockedItem.init),
+                                computedAt: now))))
+            }, problem: { .default(statusCode: $0, $1) })
+    }
+
+    /// "Today" is always the user's today, never the server's.
+    func calendar(for store: UserStore) async throws -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone =
+            TimeZone(identifier: try await store.timezone() ?? "Asia/Kolkata")
+            ?? TimeZone(identifier: "Asia/Kolkata")!
+        return calendar
     }
 
     func listEdges(_ input: Operations.ListEdges.Input) async throws -> Operations.ListEdges.Output

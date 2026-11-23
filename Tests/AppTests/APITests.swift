@@ -335,7 +335,7 @@ struct ItemGoalTests {
 @Suite("Later steps answer 501")
 struct NotYetTests {
     @Test(arguments: [
-        (HTTPRequest.Method.get, "/v1/plan"), (.get, "/v1/edges"), (.get, "/v1/questions"),
+        (HTTPRequest.Method.get, "/v1/questions"), (.get, "/v1/questions"),
     ])
     func notImplementedYet(_ method: HTTPRequest.Method, _ uri: String) async throws {
         try await testApp().test(.router) { client in

@@ -63,3 +63,21 @@ extension Components.Schemas.Item {
             createdAt: item.createdAt, updatedAt: item.updatedAt)
     }
 }
+
+extension Components.Schemas.RankedItem {
+    init(_ ranked: BrainCore.RankedItem) {
+        let b = ranked.breakdown
+        self.init(
+            item: .init(ranked.item), reason: ranked.reason,
+            why: .init(
+                unblocks: b.unblockedConfirmed, mayUnblock: b.unblockedAdditional,
+                servesGoals: b.goalsConfirmed, mayServeGoals: b.goalsAdditional,
+                duePressure: b.duePressure))
+    }
+}
+
+extension Components.Schemas.BlockedItem {
+    init(_ blocked: BrainCore.BlockedItem) {
+        self.init(item: .init(blocked.item), blockedBy: blocked.blockers.map(\.id.rawValue))
+    }
+}
