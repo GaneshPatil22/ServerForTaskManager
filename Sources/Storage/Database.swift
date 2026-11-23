@@ -95,6 +95,7 @@ public final class Database: Sendable {
         await migrations.add(M0001_CoreTables(), skipDuplicates: true)
         await migrations.add(M0002_BudgetCounters(), skipDuplicates: true)
         await migrations.add(M0003_CaptureProgress(), skipDuplicates: true)
+        await migrations.add(M0004_RejectedLinks(), skipDuplicates: true)
         try await migrations.apply(client: client, logger: logger, dryRun: false)
     }
 

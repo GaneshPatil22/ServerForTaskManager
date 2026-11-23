@@ -81,3 +81,12 @@ extension Components.Schemas.BlockedItem {
         self.init(item: .init(blocked.item), blockedBy: blocked.blockers.map(\.id.rawValue))
     }
 }
+
+extension Components.Schemas.Edge {
+    init(_ edge: BrainCore.Edge) {
+        self.init(
+            id: edge.id.rawValue, from: edge.from.rawValue, to: edge.to.rawValue,
+            kind: convert(edge.kind), confidence: edge.confidence,
+            suggestedBy: convert(edge.source), confirmed: edge.confirmed)
+    }
+}

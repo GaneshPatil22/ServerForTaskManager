@@ -39,6 +39,27 @@ struct APIHandler: APIProtocol {
         static func invalid(_ failure: Validation.Failure) -> Stop {
             Stop(status: 400, code: failure.code, message: failure.message)
         }
+        init(status: Int, code: String, message: String) {
+            self.status = status
+            self.code = code
+            self.message = message
+        }
+
+        init(_ refusal: UserStore.LinkRefusal) {
+            switch refusal {
+            case .cycle:
+                self.init(status: 409, code: "cycle", message: "this link would make a loop")
+            case .selfLink:
+                self.init(status: 400, code: "self_link", message: "an item cannot link to itself")
+            case .unknownEndpoint:
+                self.init(status: 404, code: "not_found", message: "no such item or goal")
+            case .wrongTarget:
+                self.init(
+                    status: 400, code: "wrong_target",
+                    message: "serves links point at a goal; other links point at an item")
+            }
+        }
+
         static let notYet = Stop(
             status: 501, code: "not_implemented", message: "this endpoint arrives in a later step")
 
@@ -320,20 +341,84 @@ struct APIHandler: APIProtocol {
 
     func listEdges(_ input: Operations.ListEdges.Input) async throws -> Operations.ListEdges.Output
     {
-        .default(statusCode: 501, Stop.notYet.problem)
+        try await run(
+            {
+                let edges = try await store().edges(confirmed: input.query.confirmed)
+                return .ok(
+                    .init(body: .json(.init(edges: edges.map(Components.Schemas.Edge.init)))))
+            }, problem: { .default(statusCode: $0, $1) })
     }
+
+    // MARK: - Links (S5b)
 
     func createEdge(_ input: Operations.CreateEdge.Input) async throws
         -> Operations.CreateEdge.Output
-    { .default(statusCode: 501, Stop.notYet.problem) }
+    {
+        try await run(
+            {
+                let body =
+                    switch input.body {
+                    case .json(let body): body
+                    }
+                let (id, from, to) = try check { () throws(Validation.Failure) in
+                    (
+                        try Validation.ulid(body.id, field: "id"),
+                        try Validation.ulid(body.from, field: "from"),
+                        try Validation.ulid(body.to, field: "to")
+                    )
+                }
+                let edge = Edge(
+                    id: id, from: from, to: to, kind: convert(body.kind), confidence: 1,
+                    source: .user, confirmed: true)
+                do {
+                    switch try await store().createUserLink(edge) {
+                    case .created(let stored):
+                        return .created(.init(body: .json(.init(stored))))
+                    case .existing(let stored):
+                        return .ok(.init(body: .json(.init(stored))))
+                    }
+                } catch let refusal as UserStore.LinkRefusal {
+                    throw Stop(refusal)
+                }
+            }, problem: { .default(statusCode: $0, $1) })
+    }
 
     func confirmEdge(_ input: Operations.ConfirmEdge.Input) async throws
         -> Operations.ConfirmEdge.Output
-    { .default(statusCode: 501, Stop.notYet.problem) }
+    {
+        try await run(
+            {
+                let id = try check { () throws(Validation.Failure) in
+                    try Validation.ulid(input.path.id, field: "id")
+                }
+                guard
+                    let edge = try await store().confirmSuggestion(
+                        id, correction: newULID(), at: clock())
+                else { throw Stop.notFound("link") }
+                return .ok(.init(body: .json(.init(edge))))
+            }, problem: { .default(statusCode: $0, $1) })
+    }
 
     func rejectEdge(_ input: Operations.RejectEdge.Input) async throws
         -> Operations.RejectEdge.Output
-    { .default(statusCode: 501, Stop.notYet.problem) }
+    {
+        try await run(
+            {
+                let id = try check { () throws(Validation.Failure) in
+                    try Validation.ulid(input.path.id, field: "id")
+                }
+                guard try await store().rejectLink(id, correction: newULID(), at: clock()) else {
+                    throw Stop.notFound("link")
+                }
+                return .noContent(.init())
+            }, problem: { .default(statusCode: $0, $1) })
+    }
+
+    /// Ids the server mints itself (corrections). Random seed, real clock.
+    func newULID() -> ULID {
+        var generator = ULIDGenerator(seed: UInt64.random(in: .min ... .max))
+        return generator.next()
+    }
 
     func listQuestions(_ input: Operations.ListQuestions.Input) async throws
         -> Operations.ListQuestions.Output
