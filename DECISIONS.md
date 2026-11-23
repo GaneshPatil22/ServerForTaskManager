@@ -334,3 +334,47 @@ Agreed with Ganesh. Nothing produces questions today: `classifyType` never
 routes to T3. Their storage and endpoints get built in S5, alongside
 `judgeLink`, which is what will ask them. Until then, `listQuestions` and
 `answerQuestion` keep answering 501.
+
+### 2026-11-24 — S5: plan, links, item edits (questions still waiting on Brain)
+
+**S5a, `GET /v1/plan`.** One `Brain.compute` pass over the user's graph in
+their timezone: next, ranked, quick wins, blocked. No model involved.
+
+**S5b, links.**
+- **Rejected links stay as rows** (`M0004`, a `rejected` flag) and are left
+  out of every read and of the graph. The existing unique (user, from, to,
+  kind) index then stops the worker's `ON CONFLICT DO NOTHING` from ever
+  re-suggesting one, with no extra lookup.
+- **Every graph-changing write** (user links and the worker's save) takes the
+  user's row lock and checks with `BrainGraph.addEdge` inside the same
+  transaction. **Measured:** without the lock, two simultaneous opposite links
+  stored a cycle on every run. With it, exactly one survives.
+- **Corrections both ways.** Confirming and rejecting a suggestion each record
+  a correction against the tier that made it. B6 learns from right answers as
+  well as wrong ones.
+- Writing a link the worker had only suggested confirms that suggestion. A
+  user can also make a link they once rejected; the row is brought back.
+- 409 `cycle`, 400 `self_link` and `wrong_target`, 404 for another user's
+  endpoints.
+
+**S5c, `PATCH /v1/items/{id}`.** One transaction, item row locked.
+- A field that really changes becomes the user's (confidence 1,
+  `decidedBy: user`) and records a correction against its previous tier.
+- A title change is a correction too (titles are derived at T0).
+- Status is not a correction: finishing an item is the user's call, not a
+  tier's mistake.
+- A value sent unchanged changes nothing. A goal that isn't the user's rolls
+  the whole edit back (404).
+
+**Found while building:** postgres-nio 1.33.3 wraps anything thrown inside
+`withTransaction` in `PostgresTransactionError`. Code matching on `PSQLError`
+silently misses it. A test caught this: a foreign goal gave 500 instead of 404.
+`sqlState(of:)` now unwraps it.
+
+**S5d, questions: not built, waiting on Brain.** `Capability.judgeLink` exists
+in Brain 0.5.1, but nothing routes it. The pipeline never calls it, and
+`ProductionRouter` says `Rung` needs a predicate first. The two endpoints keep
+answering 501.
+
+**Verified:** `make ci` green, 104 tests. Mutation: user lock removed → cycle
+race reproduced every run.

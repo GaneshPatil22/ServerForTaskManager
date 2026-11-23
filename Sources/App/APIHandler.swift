@@ -301,9 +301,42 @@ struct APIHandler: APIProtocol {
 
     // MARK: - Later steps (501 until then)
 
+    /// The user changes an item. Each real change to a classified field is
+    /// recorded as a correction against the tier that had decided it (S5c).
     func updateItem(_ input: Operations.UpdateItem.Input) async throws
         -> Operations.UpdateItem.Output
-    { .default(statusCode: 501, Stop.notYet.problem) }
+    {
+        try await run(
+            {
+                let body =
+                    switch input.body {
+                    case .json(let body): body
+                    }
+                let (id, title, goalId) = try check { () throws(Validation.Failure) in
+                    (
+                        try Validation.ulid(input.path.id, field: "id"),
+                        try body.title.map { title throws(Validation.Failure) in
+                            try Validation.text(
+                                title, field: "title", max: Validation.maxTitleLength)
+                        },
+                        try Validation.optionalULID(body.goalId, field: "goalId")
+                    )
+                }
+                let change = UserStore.ItemChange(
+                    title: title, status: body.status.map { convert($0) },
+                    type: body._type.map { convert($0) }, effort: body.effort.map { convert($0) },
+                    dueAt: body.dueAt, goalId: goalId, category: body.category.map { convert($0) })
+                let item: Item?
+                do {
+                    item = try await store().editItem(
+                        id, change, at: clock(), newID: { Self.mintULID() })
+                } catch UserStore.ItemEditRefusal.unknownGoal {
+                    throw Stop.notFound("goal")
+                }
+                guard let item else { throw Stop.notFound("item") }
+                return .ok(.init(body: .json(.init(item))))
+            }, problem: { .default(statusCode: $0, $1) })
+    }
 
     // MARK: - Plan
 
@@ -415,7 +448,9 @@ struct APIHandler: APIProtocol {
     }
 
     /// Ids the server mints itself (corrections). Random seed, real clock.
-    func newULID() -> ULID {
+    func newULID() -> ULID { Self.mintULID() }
+
+    static func mintULID() -> ULID {
         var generator = ULIDGenerator(seed: UInt64.random(in: .min ... .max))
         return generator.next()
     }

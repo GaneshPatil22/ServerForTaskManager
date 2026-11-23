@@ -253,10 +253,17 @@ public struct UserStore: Sendable {
     private func items(
         id: ULID?, after: ULID? = nil, limit: Int? = nil, status: ItemStatus? = nil
     ) async throws -> [Item] {
+        try await items(id: id, after: after, limit: limit, status: status, on: client)
+    }
+
+    private func items(
+        id: ULID?, after: ULID?, limit: Int?, status: ItemStatus?, on runner: some QueryRunner,
+        lock: Bool = false
+    ) async throws -> [Item] {
         let id = id?.rawValue
         let after = after?.rawValue
         let status = status?.rawValue
-        let query: PostgresQuery = """
+        var query: PostgresQuery = """
             SELECT * FROM items
             WHERE user_id = \(uid) AND (\(id)::text IS NULL OR id = \(id)::text)
               AND (\(after)::text IS NULL OR id > \(after)::text)
@@ -264,8 +271,9 @@ public struct UserStore: Sendable {
             ORDER BY id
             LIMIT \(limit)::bigint
             """
+        if lock { query.sql += " FOR UPDATE" }
         var result: [Item] = []
-        for try await row in try await client.query(query, logger: logger) {
+        for try await row in try await runner.run(query, logger: logger) {
             let r = RowReader(row: row.makeRandomAccess(), table: "items")
             result.append(
                 Item(
@@ -581,6 +589,128 @@ public struct UserStore: Sendable {
         return result
     }
 
+    // MARK: - Item edits (corrections)
+
+    /// What the user changed. Nil means "leave as is".
+    public struct ItemChange: Sendable {
+        public var title: String?
+        public var status: ItemStatus?
+        public var type: ItemType?
+        public var effort: EffortBucket?
+        public var dueAt: Date?
+        public var goalId: ULID?
+        public var category: TaskCategory?
+
+        public init(
+            title: String? = nil, status: ItemStatus? = nil, type: ItemType? = nil,
+            effort: EffortBucket? = nil, dueAt: Date? = nil, goalId: ULID? = nil,
+            category: TaskCategory? = nil
+        ) {
+            self.title = title
+            self.status = status
+            self.type = type
+            self.effort = effort
+            self.dueAt = dueAt
+            self.goalId = goalId
+            self.category = category
+        }
+    }
+
+    public enum ItemEditRefusal: Error, Equatable {
+        /// `goalId` names no goal of this user's.
+        case unknownGoal
+    }
+
+    /// Applies the user's edit in one transaction, with the item row locked.
+    ///
+    /// Every classified field that actually changes becomes the user's
+    /// decision (confidence 1, `decidedBy: user`) and a correction is recorded
+    /// against whichever tier decided it before. Those corrections are what
+    /// personalisation (Brain B6) learns from. A title change is a correction
+    /// too (titles are derived at T0). Status is not: finishing or dropping an
+    /// item is the user's call, not a tier's mistake. A value sent unchanged
+    /// changes nothing. Returns nil if there is no such item for this user.
+    public func editItem(
+        _ id: ULID, _ change: ItemChange, at date: Date,
+        newID: @escaping @Sendable () -> ULID
+    ) async throws -> Item? {
+        do {
+            return try await client.withTransaction(logger: logger) { connection in
+                guard
+                    var item = try await items(
+                        id: id, after: nil, limit: nil, status: nil, on: connection, lock: true
+                    ).first
+                else { return nil }
+                var corrections: [Correction] = []
+                func record(_ field: String, _ before: String?, _ after: String?, _ tier: Tier) {
+                    corrections.append(
+                        Correction(
+                            id: newID(), targetId: id, field: field, beforeValue: before,
+                            afterValue: after, tier: tier, createdAt: date))
+                }
+                func decide<V: Sendable & Hashable>(
+                    _ field: String, _ current: inout Classified<V>, _ new: V?,
+                    _ text: (V) -> String
+                ) {
+                    guard let new, current.value != new else { return }
+                    record(field, current.value.map(text), text(new), current.tier)
+                    current = Classified(new, confidence: 1, tier: .user)
+                }
+
+                if let title = change.title, title != item.title {
+                    record("title", item.title, title, item.captureId == nil ? .user : .t0)
+                    item.title = title
+                }
+                if let status = change.status { item.status = status }
+                decide("type", &item.type, change.type, \.rawValue)
+                decide("effort", &item.effort, change.effort, \.rawValue)
+                decide("dueAt", &item.dueAt, change.dueAt) { $0.ISO8601Format() }
+                decide("goalId", &item.goalId, change.goalId, \.rawValue)
+                decide("category", &item.category, change.category, \.rawValue)
+                item.updatedAt = date
+
+                try await replaceItem(item, on: connection)
+                for correction in corrections {
+                    try await insertCorrection(correction, on: connection)
+                }
+                return item
+            }
+        } catch  where sqlState(of: error) == "23503" {
+            throw ItemEditRefusal.unknownGoal
+        }
+    }
+
+    /// Rewrites every mutable column of an existing item.
+    func replaceItem(_ item: Item, on runner: some QueryRunner) async throws {
+        let type = ClassifiedBinds(item.type) { $0.rawValue }
+        let effort = ClassifiedBinds(item.effort) { $0.rawValue }
+        let due = ClassifiedBinds(item.dueAt) { $0 }
+        let goal = ClassifiedBinds(item.goalId) { $0.rawValue }
+        let category = ClassifiedBinds(item.category) { $0.rawValue }
+        _ = try await runner.run(
+            """
+            UPDATE items SET
+                title = \(item.title), status = \(item.status.rawValue),
+                type = \(type.value), type_confidence = \(type.confidence),
+                type_tier = \(type.tier), type_evidence_start = \(type.start),
+                type_evidence_end = \(type.end),
+                effort = \(effort.value), effort_confidence = \(effort.confidence),
+                effort_tier = \(effort.tier), effort_evidence_start = \(effort.start),
+                effort_evidence_end = \(effort.end),
+                due_at = \(due.value), due_at_confidence = \(due.confidence),
+                due_at_tier = \(due.tier), due_at_evidence_start = \(due.start),
+                due_at_evidence_end = \(due.end),
+                goal_id = \(goal.value), goal_id_confidence = \(goal.confidence),
+                goal_id_tier = \(goal.tier), goal_id_evidence_start = \(goal.start),
+                goal_id_evidence_end = \(goal.end),
+                category = \(category.value), category_confidence = \(category.confidence),
+                category_tier = \(category.tier), category_evidence_start = \(category.start),
+                category_evidence_end = \(category.end),
+                updated_at = \(item.updatedAt)
+            WHERE user_id = \(uid) AND id = \(item.id.rawValue)
+            """, logger: logger)
+    }
+
     // MARK: - Enrichment
 
     /// Takes a capture for enrichment: moves it to `enriching` and counts the
@@ -736,4 +866,15 @@ struct RowReader {
             value, confidence: try self.value("\(name)_confidence"), tier: tier,
             evidence: evidence)
     }
+}
+
+/// The Postgres error code behind `error`, looking inside
+/// `PostgresTransactionError`: postgres-nio 1.33.3 wraps anything thrown in a
+/// transaction closure in one, so matching on `PSQLError` alone misses it.
+func sqlState(of error: any Error) -> String? {
+    if let psql = error as? PSQLError { return psql.serverInfo?[.sqlState] }
+    if let transaction = error as? PostgresTransactionError, let inner = transaction.closureError {
+        return sqlState(of: inner)
+    }
+    return nil
 }

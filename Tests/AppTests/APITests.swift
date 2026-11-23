@@ -334,12 +334,9 @@ struct ItemGoalTests {
 
 @Suite("Later steps answer 501")
 struct NotYetTests {
-    @Test(arguments: [
-        (HTTPRequest.Method.get, "/v1/questions"), (.get, "/v1/questions"),
-    ])
-    func notImplementedYet(_ method: HTTPRequest.Method, _ uri: String) async throws {
+    @Test func questionsWaitOnBrainsJudgeLink() async throws {
         try await testApp().test(.router) { client in
-            let r = try await Caller().send(client, method, uri)
+            let r = try await Caller().send(client, .get, "/v1/questions")
             #expect(r.status == .notImplemented)
             #expect(r.body["code"] as? String == "not_implemented")
         }
