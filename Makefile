@@ -24,8 +24,9 @@ db-reset: ## Stop local Postgres and delete its data
 lint: ## Format check
 	swift format lint --strict --recursive Sources Tests Package.swift
 
-run: ## Run locally on 127.0.0.1:8080
-	swift run brain-server
+run: db-up ## Run locally on 127.0.0.1:8080, with settings from .env
+	@test -f .env || (echo "no .env: copy .env.example to .env and fill it in"; exit 1)
+	set -a && . ./.env && set +a && swift run brain-server
 
 # CI gets Postgres from a service container instead of `db-up`; the commands
 # that run against it are identical.

@@ -1,0 +1,7 @@
+.build
+.git
+.env
+.env.*
+*.pem
+*.key
+*.crt

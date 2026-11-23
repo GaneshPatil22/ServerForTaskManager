@@ -3,6 +3,7 @@ import Foundation
 import Logging
 import PostgresMigrations
 import JobsPostgres
+import NIOSSL
 import PostgresNIO
 
 /// A Supabase user id (`auth.users.id`). Every data access needs one.
@@ -20,23 +21,41 @@ public enum StorageError: Error, Equatable {
 }
 
 public struct DatabaseConfiguration: Sendable {
+    /// How the connection is encrypted. There is deliberately no "encrypt but
+    /// don't check who answers": that protects against nobody.
+    public enum TLSMode: Sendable, Equatable {
+        /// Local Docker only.
+        case disabled
+        /// Encrypted, with the server's certificate chain *and* hostname
+        /// checked. Against `caFile` if given (Supabase publishes its own
+        /// root certificate), otherwise the system's trusted roots.
+        case verifyFull(caFile: String?)
+    }
+
     public var host: String
     public var port: Int
     public var username: String
     public var password: String
     public var database: String
+    public var tls: TLSMode
 
-    public init(host: String, port: Int, username: String, password: String, database: String) {
+    public init(
+        host: String, port: Int, username: String, password: String, database: String,
+        tls: TLSMode = .disabled
+    ) {
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.database = database
+        self.tls = tls
     }
 
     /// Reads `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USER`,
-    /// `DATABASE_PASSWORD`, `DATABASE_NAME`. No defaults: a missing value is
-    /// an error, so production never silently connects somewhere local.
+    /// `DATABASE_PASSWORD`, `DATABASE_NAME`, `DATABASE_TLS` (`disable` or
+    /// `verify-full`) and optionally `DATABASE_CA_FILE`. No defaults: a missing
+    /// value is an error, so production never silently connects somewhere
+    /// local, or unencrypted.
     public static func fromEnvironment(
         _ env: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> Self {
@@ -50,18 +69,40 @@ public struct DatabaseConfiguration: Sendable {
         guard let port = Int(portString) else {
             throw StorageError.missingEnvironment("DATABASE_PORT (not a number)")
         }
+        let tls: TLSMode
+        switch try require("DATABASE_TLS") {
+        case "disable":
+            tls = .disabled
+        case "verify-full":
+            let caFile = env["DATABASE_CA_FILE"].flatMap { $0.isEmpty ? nil : $0 }
+            if let caFile, !FileManager.default.isReadableFile(atPath: caFile) {
+                throw StorageError.missingEnvironment("DATABASE_CA_FILE (cannot read \(caFile))")
+            }
+            tls = .verifyFull(caFile: caFile)
+        case let other:
+            throw StorageError.missingEnvironment(
+                "DATABASE_TLS (\(other)): use disable or verify-full")
+        }
         return .init(
             host: try require("DATABASE_HOST"), port: port,
             username: try require("DATABASE_USER"), password: try require("DATABASE_PASSWORD"),
-            database: try require("DATABASE_NAME"))
+            database: try require("DATABASE_NAME"), tls: tls)
     }
 
-    /// TLS is off: this is for the local Docker database. Connecting to
-    /// Supabase needs TLS, which is added with deployment (S6).
     var clientConfiguration: PostgresClient.Configuration {
-        .init(
+        let tls: PostgresClient.Configuration.TLS
+        switch self.tls {
+        case .disabled:
+            tls = .disable
+        case .verifyFull(let caFile):
+            var config = TLSConfiguration.makeClientConfiguration()
+            config.certificateVerification = .fullVerification
+            if let caFile { config.trustRoots = .file(caFile) }
+            tls = .require(config)
+        }
+        return .init(
             host: host, port: port, username: username, password: password,
-            database: database, tls: .disable)
+            database: database, tls: tls)
     }
 }
 

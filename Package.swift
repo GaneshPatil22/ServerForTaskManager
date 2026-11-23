@@ -24,6 +24,7 @@ let package = Package(
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", exact: "2.29.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", exact: "1.8.2"),
         .package(url: "https://github.com/vapor/postgres-nio.git", exact: "1.33.3"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", exact: "2.37.7"),
         .package(
             url: "https://github.com/hummingbird-project/postgres-migrations.git", exact: "1.2.0"),
         .package(url: "https://github.com/vapor/jwt-kit.git", exact: "5.9.1"),
@@ -52,6 +53,7 @@ let package = Package(
                 .product(name: "BrainCore", package: brainPackage),
                 .product(name: "BrainHarness", package: brainPackage),
                 .product(name: "JobsPostgres", package: "swift-jobs-postgres"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ]
         ),
         // The HTTP contract. `openapi.yaml` is the source of truth; types and

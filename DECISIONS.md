@@ -378,3 +378,46 @@ answering 501.
 
 **Verified:** `make ci` green, 104 tests. Mutation: user lock removed → cycle
 race reproduced every run.
+
+### 2026-11-24 — S6a: TLS, Docker image, local end-to-end run
+
+**Supabase project** `evhhbfrlkxtlgnhnsipf`. Its JWKS serves one ES256 P-256
+key (checked today), so ADR-0007's asymmetric signing is on and matches the
+verifier. **MCP:** the existing Supabase MCP is signed in to a different
+account and can't see this project. A separate `supabase-brain` MCP was
+added: project-scoped, `read_only=true`, local to this folder. It is
+read-only because the server owns the schema through its own migrations.
+The user still has to authenticate it (`/mcp`).
+
+**Database TLS.** `DATABASE_TLS` is required, with no default: `disable`
+(local Docker only) or `verify-full`, which checks the certificate chain and
+the hostname (postgres-nio uses the configured host as the TLS server name).
+`DATABASE_CA_FILE` optionally pins Supabase's own root certificate. There is
+no "encrypt without verifying" mode: it protects against nobody.
+swift-nio-ssl 2.37.7 (latest today) is now a direct dependency.
+
+**Connection to Supabase:** the shared pooler in **session mode** (IPv4,
+port 5432). The direct connection is IPv6-only on the free tier, and
+transaction mode doesn't fit a long-running server.
+
+**Docker image** (`Dockerfile`): Brain comes from its pinned tag, release
+build with static Swift stdlib, on `ubuntu:noble`, running as a non-root user.
+- `tzdata`, without which every IANA timezone fails.
+- `ca-certificates`.
+- `libcurl4`. Found by actually running the image: the first one couldn't
+  start (`libcurl.so.4` missing; a dependency links FoundationNetworking).
+  `ldd` then confirmed nothing else is missing.
+- `Tests/` is copied into the build stage only, because `Package.swift`
+  declares a target there.
+
+**Verified in the Linux container (arm64):** health 200, 401 without a
+token, the worker enriched a capture ("tomorrow" resolved in Asia/Kolkata).
+
+**Local end-to-end:** `make run` loads `.env` (gitignored), with local
+Postgres and the real Supabase project for sign-in. The Website already
+proxies `/v1` to 127.0.0.1:8080, so no CORS is needed in dev. **CORS will be
+needed** once web and API live on different origins in production.
+
+**Supabase Auth limit to remember:** the built-in email sender only sends to
+members of the Supabase organisation, with a small hourly cap. Fine for
+testing; real users need custom SMTP before launch.
