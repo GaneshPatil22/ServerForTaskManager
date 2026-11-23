@@ -75,10 +75,11 @@ struct AuthMiddlewareTests {
         }
     }
 
-    @Test func healthNeedsNoToken() async throws {
-        let app = try await buildApplication(TestArguments())
-        try await app.test(.router) { client in
-            try await client.execute(uri: "/health", method: .get) { #expect($0.status == .ok) }
+    @Test func apiRoutesNeedAToken() async throws {
+        try await testApp().test(.router) { client in
+            try await client.execute(uri: "/v1/captures", method: .get) { response in
+                #expect(response.status == .unauthorized)
+            }
         }
     }
 }

@@ -5,47 +5,7 @@ import PostgresNIO
 import Testing
 
 @testable import Storage
-
-/// One migrated database shared by every test in the process. Each test
-/// creates its own random users, so tests never see each other's rows.
-enum TestDatabase {
-    static let ready = Task<Database, any Error> {
-        var logger = Logger(label: "storage-tests")
-        logger.logLevel = .warning
-        let env = ProcessInfo.processInfo.environment
-        let config = DatabaseConfiguration(
-            host: env["DATABASE_HOST"] ?? "127.0.0.1",
-            port: env["DATABASE_PORT"].flatMap(Int.init) ?? 54329,
-            username: env["DATABASE_USER"] ?? "brain",
-            password: env["DATABASE_PASSWORD"] ?? "brain",
-            database: env["DATABASE_NAME"] ?? "brain_test")
-        // Wiping the schema is only ever allowed on a database named *_test.
-        precondition(config.database.hasSuffix("_test"), "tests must use a *_test database")
-
-        let db = Database(configuration: config, logger: logger)
-        Task { await db.run() }
-        // Start from nothing every run, so the migration itself is tested too.
-        try await db.client.query("DROP SCHEMA public CASCADE")
-        try await db.client.query("CREATE SCHEMA public")
-        try await db.migrate()
-        return db
-    }
-
-    static func get() async throws -> Database { try await ready.value }
-
-    /// A fresh user that already exists in `users`.
-    static func newUser() async throws -> UserStore {
-        let store = try await get().scoped(to: UserID(UUID()))
-        try await store.ensureUser()
-        return store
-    }
-}
-
-func newID() -> ULID {
-    ULID(
-        timestampMilliseconds: UInt64(Date().timeIntervalSince1970 * 1000),
-        randomness: (0..<10).map { _ in UInt8.random(in: 0...255) })
-}
+@_exported import TestDatabase
 
 /// Whole seconds, so a value survives the round trip through `timestamptz`
 /// (microsecond precision) and compares equal.

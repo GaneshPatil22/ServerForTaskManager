@@ -29,6 +29,9 @@ let package = Package(
         .package(url: "https://github.com/vapor/jwt-kit.git", exact: "5.9.1"),
         .package(url: "https://github.com/apple/swift-openapi-generator.git", exact: "1.14.4"),
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", exact: "1.13.4"),
+        .package(
+            url: "https://github.com/hummingbird-project/swift-openapi-hummingbird.git",
+            exact: "2.1.0"),
         .package(url: "https://github.com/swift-server/async-http-client.git", exact: "1.37.1"),
         // Tests only: RSA key generation for the RS256 cases. Already in the
         // graph through jwt-kit; pinned to the version that resolves.
@@ -65,11 +68,20 @@ let package = Package(
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
             ]
         ),
+        // Test helpers shared by every test target: one migrated test database
+        // per test process. Not part of the server product.
+        .target(
+            name: "TestDatabase",
+            dependencies: ["Storage", .product(name: "BrainCore", package: brainPackage)],
+            path: "Tests/TestDatabase"
+        ),
         .executableTarget(
             name: "App",
             dependencies: [
+                "API",
                 "Auth",
                 "Storage",
+                .product(name: "OpenAPIHummingbird", package: "swift-openapi-hummingbird"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "BrainCore", package: brainPackage),
@@ -80,6 +92,8 @@ let package = Package(
             dependencies: [
                 "App",
                 "Auth",
+                "Storage",
+                "TestDatabase",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
                 .product(name: "JWTKit", package: "jwt-kit"),
                 .product(name: "BrainCore", package: brainPackage),
@@ -97,6 +111,7 @@ let package = Package(
             name: "StorageTests",
             dependencies: [
                 "Storage",
+                "TestDatabase",
                 .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "BrainCore", package: brainPackage),
             ]

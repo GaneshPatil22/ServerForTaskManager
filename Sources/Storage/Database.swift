@@ -70,11 +70,13 @@ public struct DatabaseConfiguration: Sendable {
 public final class Database: Sendable {
     let client: PostgresClient
     let logger: Logger
+    let name: String
 
     public init(configuration: DatabaseConfiguration, logger: Logger) {
         self.client = PostgresClient(
             configuration: configuration.clientConfiguration, backgroundLogger: logger)
         self.logger = logger
+        self.name = configuration.database
     }
 
     /// Runs the connection pool. Must be running for any query to complete;
@@ -88,6 +90,15 @@ public final class Database: Sendable {
         let migrations = DatabaseMigrations()
         await migrations.add(M0001_CoreTables())
         try await migrations.apply(client: client, logger: logger, dryRun: false)
+    }
+
+    /// Drops everything and migrates from nothing. Package-only, and refuses
+    /// to run on any database whose name does not end in `_test`.
+    package func resetForTests() async throws {
+        precondition(name.hasSuffix("_test"), "refusing to wipe \(name): not a *_test database")
+        try await client.query("DROP SCHEMA public CASCADE", logger: logger)
+        try await client.query("CREATE SCHEMA public", logger: logger)
+        try await migrate()
     }
 
     public func scoped(to user: UserID) -> UserStore {

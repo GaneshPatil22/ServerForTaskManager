@@ -179,3 +179,49 @@ That is migration M0002, in S5.
 **Build order inside the steps:** S3b implements me, captures, items (read),
 goals. S4 adds questions and the enrichment that fills items. S5 adds plan,
 edges and item edits with corrections.
+
+### 2026-11-24 — S3b: the first endpoints
+
+Implemented: `me` (get, timezone), `captures` (create, list, get), `items`
+(list, get), `goals` (list, create, update). The S4 and S5 operations answer
+**501 `not_implemented`**, so clients can be built against the whole spec now.
+swift-openapi-hummingbird 2.1.0 added.
+
+**How the pieces fit:**
+- The generated handlers get no Hummingbird context, so `AuthMiddleware` puts
+  the user in a task-local (`RequestUser`) and the handler reads it. That
+  works because both run in the same task.
+- `ErrorHandlingMiddleware` (OpenAPIRuntime) is registered. Without it, a
+  malformed body is a 500. With it, the runtime's own mapping gives 400. A
+  test covers this; removing the middleware makes it fail.
+- Expected failures are returned as the spec's `Problem` responses, never
+  thrown. Another user's id and an id that never existed give byte-identical
+  404s, and a test compares the two bodies.
+- The user's row is created on first sight and cached per process (`KnownUsers`).
+  Rows are never deleted, so the cache can't go stale.
+- **Migrations run on startup**, before the server listens. That is safe on a
+  single VM with one instance. If a second instance ever runs, migration moves
+  to a separate deploy step.
+- The server refuses to start without the `DATABASE_*` variables and
+  `SUPABASE_URL`. There are no defaults that could point production at
+  something local.
+
+**Every limit the generator does not enforce is checked in code, each with a
+test:** ULID ids, which must be exactly uppercase (a lowercase ULID would
+otherwise be a second spelling of the same id); text and title lengths,
+counted in Unicode characters, so 20,000 Devanagari characters are allowed;
+`limit` between 1 and 500; `after` must be a ULID; IANA timezone names.
+
+**Test setup change:** both test targets now share one `TestDatabase` target.
+They run in one process, and two separate schema resets would have wiped each
+other's data.
+
+**Verified:** `make ci` green. 66 tests: storage 15, auth 25, app 26. Three
+mutations caught: future time not clamped, lenient ULID check, error
+middleware removed. The real binary was also started against the dev
+database. It migrated on startup, answered `/health` with 200, and gave 401
+for no token and for an HS256 token.
+
+**Not done yet:** a capture is stored, but nothing enriches it. Its status
+stays `raw` until the S4 worker exists. Real Supabase tokens are still
+unverified, because there is no project yet.

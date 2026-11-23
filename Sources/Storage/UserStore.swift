@@ -32,6 +32,12 @@ public struct UserStore: Sendable {
         return nil
     }
 
+    /// The caller validates the name; the database only stores it.
+    public func setTimezone(_ timezone: String) async throws {
+        try await client.query(
+            "UPDATE users SET timezone = \(timezone) WHERE id = \(uid)", logger: logger)
+    }
+
     // MARK: - Captures
 
     /// Idempotent. A retry with the same `idempotencyKey`, or the same id,
@@ -71,6 +77,13 @@ public struct UserStore: Sendable {
         try await captures(id: nil)
     }
 
+    /// One page, oldest first, starting after `after`.
+    public func captures(after: ULID?, limit: Int, status: CaptureStatus?) async throws
+        -> [Capture]
+    {
+        try await captures(id: nil, after: after, limit: limit, status: status)
+    }
+
     /// Returns false if no such capture exists for this user.
     @discardableResult
     public func setCaptureStatus(_ id: ULID, _ status: CaptureStatus) async throws -> Bool {
@@ -82,17 +95,23 @@ public struct UserStore: Sendable {
     }
 
     /// A nil filter matches everything; the user filter is always applied.
-    private func captures(id: ULID? = nil, idempotencyKey key: String? = nil) async throws
-        -> [Capture]
-    {
+    private func captures(
+        id: ULID? = nil, idempotencyKey key: String? = nil, after: ULID? = nil,
+        limit: Int? = nil, status: CaptureStatus? = nil
+    ) async throws -> [Capture] {
         let id = id?.rawValue
+        let after = after?.rawValue
+        let status = status?.rawValue
         let query: PostgresQuery = """
             SELECT id, raw_text, source, status, idempotency_key, created_at
             FROM captures
             WHERE user_id = \(uid)
               AND (\(id)::text IS NULL OR id = \(id)::text)
               AND (\(key)::text IS NULL OR idempotency_key = \(key)::text)
+              AND (\(after)::text IS NULL OR id > \(after)::text)
+              AND (\(status)::text IS NULL OR status = \(status)::text)
             ORDER BY id
+            LIMIT \(limit)::bigint
             """
         var result: [Capture] = []
         for try await row in try await client.query(query, logger: logger) {
@@ -109,19 +128,56 @@ public struct UserStore: Sendable {
 
     // MARK: - Goals
 
-    public func insertGoal(_ goal: Goal) async throws {
-        try await client.query(
+    /// Idempotent on id: a retry returns the stored goal and `created == false`.
+    @discardableResult
+    public func insertGoal(_ goal: Goal) async throws -> (goal: Goal, created: Bool) {
+        let created = try await returnsRow(
             """
             INSERT INTO goals (user_id, id, title, status, created_at)
             VALUES (\(uid), \(goal.id.rawValue), \(goal.title), \(goal.status.rawValue),
                     \(goal.createdAt))
-            """, logger: logger)
+            ON CONFLICT DO NOTHING
+            RETURNING id
+            """)
+        if created { return (goal, true) }
+        guard let existing = try await self.goal(goal.id) else {
+            throw StorageError.corruptRow(table: "goals", column: "id", value: goal.id.rawValue)
+        }
+        return (existing, false)
+    }
+
+    public func goal(_ id: ULID) async throws -> Goal? {
+        try await goals(id: id).first
+    }
+
+    /// Changes only what is passed. Returns nil if no such goal for this user.
+    public func updateGoal(_ id: ULID, title: String?, status: GoalStatus?) async throws -> Goal? {
+        let status = status?.rawValue
+        guard
+            try await returnsRow(
+                """
+                UPDATE goals
+                SET title = coalesce(\(title)::text, title),
+                    status = coalesce(\(status)::text, status)
+                WHERE user_id = \(uid) AND id = \(id.rawValue) RETURNING id
+                """)
+        else { return nil }
+        return try await goal(id)
     }
 
     public func goals() async throws -> [Goal] {
+        try await goals(id: nil)
+    }
+
+    private func goals(id: ULID?) async throws -> [Goal] {
+        let id = id?.rawValue
         var result: [Goal] = []
         let rows = try await client.query(
-            "SELECT id, title, status, created_at FROM goals WHERE user_id = \(uid) ORDER BY id",
+            """
+            SELECT id, title, status, created_at FROM goals
+            WHERE user_id = \(uid) AND (\(id)::text IS NULL OR id = \(id)::text)
+            ORDER BY id
+            """,
             logger: logger)
         for try await row in rows {
             let r = RowReader(row: row.makeRandomAccess(), table: "goals")
@@ -175,6 +231,11 @@ public struct UserStore: Sendable {
         try await items(id: nil)
     }
 
+    /// One page, oldest first, starting after `after`.
+    public func items(after: ULID?, limit: Int, status: ItemStatus?) async throws -> [Item] {
+        try await items(id: nil, after: after, limit: limit, status: status)
+    }
+
     @discardableResult
     public func setItemStatus(_ id: ULID, _ status: ItemStatus, at date: Date) async throws -> Bool
     {
@@ -185,12 +246,19 @@ public struct UserStore: Sendable {
             """)
     }
 
-    private func items(id: ULID?) async throws -> [Item] {
+    private func items(
+        id: ULID?, after: ULID? = nil, limit: Int? = nil, status: ItemStatus? = nil
+    ) async throws -> [Item] {
         let id = id?.rawValue
+        let after = after?.rawValue
+        let status = status?.rawValue
         let query: PostgresQuery = """
             SELECT * FROM items
             WHERE user_id = \(uid) AND (\(id)::text IS NULL OR id = \(id)::text)
+              AND (\(after)::text IS NULL OR id > \(after)::text)
+              AND (\(status)::text IS NULL OR status = \(status)::text)
             ORDER BY id
+            LIMIT \(limit)::bigint
             """
         var result: [Item] = []
         for try await row in try await client.query(query, logger: logger) {

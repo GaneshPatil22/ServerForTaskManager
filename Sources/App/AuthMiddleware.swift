@@ -49,8 +49,11 @@ struct AuthMiddleware: RouterMiddleware {
             context.logger.error("token not checked: Supabase signing keys unavailable")
             throw HTTPError(.serviceUnavailable)
         }
-        context.logger[metadataKey: "user"] = .string(context.userID!.description)
-        return try await next(request, context)
+        let user = context.userID!
+        context.logger[metadataKey: "user"] = .string(user.description)
+        return try await RequestUser.$current.withValue(user) {
+            try await next(request, context)
+        }
     }
 
     static let unauthorized = HTTPError(
