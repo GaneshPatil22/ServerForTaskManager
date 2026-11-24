@@ -570,3 +570,13 @@ this step: `Caddyfile.bak-20261124-063648` and `…-063700`.
 
 **Production end to end is still unverified:** a real sign-in at
 brain.corelearnly.com, which needs the redirect URLs set in the Mumbai project.
+
+### 2026-11-24 — Website and server stay together on the VM (not Netlify)
+
+Ganesh's call, after comparing. **Same origin** means no CORS code and no
+preflight requests. Users and the server are both in India, so a global CDN
+would gain little. The VM going down takes out the API either way, so a
+separately hosted website wouldn't be usable. Serving ~700 KB of cached static
+files costs the VM almost nothing, and it is already working (`make deploy`).
+**Revisit if:** users far from India, preview deploys become wanted, or the VM
+gets crowded (then move the API first, not the website).
