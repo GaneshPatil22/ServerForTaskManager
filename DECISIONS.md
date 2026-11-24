@@ -505,3 +505,21 @@ depends on it. Pinning it is Ganesh's call, since it's part of the n8n setup.
 **Done so far:** D1, image `brain-server:b4caf59` loaded on the VM (it gained
 curl and a Docker health check, verified healthy). D2, `~/brain` (mode 700)
 with the compose file. Nothing started; no existing container touched.
+
+### 2026-11-24 — Supabase project moved to Mumbai; its CA is required
+
+**Measured first:** the VM is in `ap-mumbai-1` (instance metadata). The first
+Supabase project was in Tokyo, and TCP connects from the VM to its pooler took
+**128–142 ms**. Requests run queries in sequence (plan ≈ 4, item edit ≈ 6), so
+distance alone would have added 0.3–0.7 s to every screen. Supabase can't move
+a project between regions, and the old one held one test login, so Ganesh
+created **`rqxvzishfcthajxejvvn` in ap-south-1**. Its JWKS is ES256, email
+sign-in is on, anonymous sign-ins are off. Server `.env`, `.env.production`,
+the deploy template, the Website's `.env.local`, and the `supabase-brain` MCP
+all point at it now.
+
+**The CA file is required, not optional, for Supabase.** A TLS handshake from
+the Mac: with Supabase's `prod-ca-2021.crt`, the chain and hostname
+(`*.pooler.supabase.com`) verify (code 0). With system roots only, they fail
+(code 19: Supabase signs with its own root). `verify-full` without the file
+therefore fails closed.
