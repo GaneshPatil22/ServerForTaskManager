@@ -820,3 +820,27 @@ API with the publishable key 401 for `questions`.
 
 Rollback: `BRAIN_IMAGE_TAG=a15cdd4`, `docker compose up -d`. M0006 only added
 a table, which the old image never reads.
+
+### 2026-11-24 — Brain 0.9.0 → 0.10.0: an explicit `unknown` stops the ladder
+
+Pinned to tag 0.10.0 (`7aa02c1`, verified on the remote). The public API only
+adds (`GoogleLimits.verifiedOn`, `Guards.abstentionWords`,
+`Guards.isExplicitAbstention`, `Guards.normalise`), so no server code changes.
+`BRAIN_FROM_GIT=1 make ci` passes against the tag.
+
+**The one behaviour change** (`Router.route`): `unknown` is one of the
+answers a model is allowed to give, so a model that picks it has answered. It
+used to be treated like a malformed answer and the same question went on to
+Gemma and then Flash-Lite. Now the remaining *model* rungs are skipped; a T3
+or degrade rung is still reached. Empty output is not an abstention
+(`isExplicitAbstention` excludes it) and still falls through.
+
+**Arithmetic, per pool.** Brain's dev split: 87 of 425 escalations were an
+explicit `unknown` (64 effort, 23 category). Live, each cost one call to
+Gemma and one to Flash-Lite, about **0.21 extra calls per capture to each**.
+With 0.10.0 that is expected to be about 0. Brain reports accuracy unchanged
+(type 86.7%, dueAt 97.9%, effort 92.5%, category 87.3%) and cassette misses
+174 → 0. Decision 1 still carries about 1 call per capture (10,000/day,
+project-wide); Flash-Lite (500/day, from Ganesh's dashboard, not a public
+page) should now see almost nothing. That is checked after deploy from
+`budget_model_daily`, not assumed.
