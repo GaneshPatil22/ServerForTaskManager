@@ -102,11 +102,24 @@ public struct Enricher: Sendable {
 
         let saved = try await store.saveEnrichment(
             capture: capture.id, status: result.capture.status, item: result.item, edges: edges)
-        logTrace(result.trace, saved: saved)
+        logTrace(result.trace, item: result.item, saved: saved)
         guard saved else { return .nothingToDo }
         return result.capture.status == .failed
             ? .keptAsFailed(item: result.item.id)
             : .enriched(item: result.item.id, edges: edges.count)
+    }
+
+    /// Each settled field's confidence, two decimals, fields in a fixed order.
+    /// Values themselves are never included: they can quote the capture.
+    static func confidences(_ item: Item) -> String {
+        func entry<V: Sendable & Hashable>(_ name: String, _ field: Classified<V>) -> String? {
+            field.value == nil ? nil : "\(name)=\(String(format: "%.2f", field.confidence))"
+        }
+        return [
+            entry("category", item.category), entry("dueAt", item.dueAt),
+            entry("effort", item.effort), entry("goalId", item.goalId),
+            entry("type", item.type),
+        ].compactMap { $0 }.joined(separator: " ")
     }
 
     /// The per-user fair share of the first T2 rung's daily pool, sized by
@@ -120,14 +133,19 @@ public struct Enricher: Sendable {
             dailyLimit: BudgetLedger.fairShare(dailyLimit: pool, activeUsers: active))
     }
 
-    /// Tiers and costs only. `trace.notes` can quote the capture, so it is
-    /// never logged.
-    private func logTrace(_ trace: EnrichmentTrace, saved: Bool) {
+    /// Tiers, confidences and costs only. `trace.notes` can quote the
+    /// capture, so it is never logged; nor is any field's value.
+    ///
+    /// Which *model* answered is not here: Brain's pipeline never learns
+    /// which rung of the ladder answered, and `EnrichmentTrace` does not carry
+    /// it (asked of Brain, 24 Nov).
+    private func logTrace(_ trace: EnrichmentTrace, item: Item, saved: Bool) {
         logger.info(
             "capture enriched",
             metadata: [
                 "saved": "\(saved)",
                 "tiers": "\(trace.tierByField.mapValues(\.rawValue).sorted { $0.key < $1.key })",
+                "confidence": "\(Self.confidences(item))",
                 "unresolved": "\(trace.unresolved.sorted())",
                 "routed": "\(trace.routedCapabilities)",
                 "tokens": "\(trace.estimatedTokens)",

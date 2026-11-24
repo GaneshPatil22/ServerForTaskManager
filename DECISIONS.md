@@ -622,3 +622,24 @@ Step 3 decisions, taken on Ganesh's "go with your recommendations":
 
 Still asked of Brain: the answering rung, model and confidence in
 `EnrichmentTrace`, so the log can say which model answered.
+
+### 2026-11-24 — P1: corrections export, and confidence in the log
+
+**Corrections export** is an operator subcommand of the same binary:
+`docker exec brain-server ./brain-server export-corrections [--since YYYY-MM-DD] > corrections.jsonl`.
+`brain-server` with no subcommand still serves, so the container's command is
+unchanged. One JSON line per correction: field, tier, before/after, the
+target (item / edge / goal) with its title and the capture's text, and titles
+for before/after values that are item or goal ids, so a `bigTask` swap is
+readable. Users are a 16-hex salted SHA-256 (`CORRECTIONS_EXPORT_SALT`, done
+in Postgres, which has `sha256()` built in, so no crypto dependency is
+added); the same salt gives the same pseudonym across exports. No HTTP
+route: cross-user data never goes near the request path. Tested: context is
+joined, the raw user id is absent, pseudonyms are stable per user and differ
+between users.
+
+**Log:** `capture enriched` gains `confidence` (per settled field, two
+decimals, never the value). The model's name cannot be logged yet:
+`EnrichmentTrace` keeps only `routedCapabilities`, and Brain's router is
+designed so the pipeline never learns which rung answered. Requested from
+Brain.
