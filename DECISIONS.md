@@ -454,3 +454,20 @@ returns **404**. Nothing creates questions until Brain routes `judgeLink`, so
 showed as a red console error in every browser on every page load, and no
 client code can hide that. The contract is unchanged; when Brain asks real
 questions, the same endpoint starts returning them and clients need no change.
+
+### 2026-11-24 — Brain pinned to 0.6.0
+
+The Brain session described 0.6.0 as a behaviour change only (`Edge`
+unchanged: more suggested links, and "before" links pointing the right way).
+It assumed a `from:` requirement. The server pins `exact:` (ADR-0003), so
+nothing moves until the pin does, which is the point.
+
+**Found:** local builds use `../Brain` by path, which was already at 0.6.0,
+while CI and Docker built 0.5.1. Local testing and CI were on different Brain
+versions without anyone choosing it. Now both are 0.6.0.
+
+**Verified on 0.6.0:** all 110 tests pass against the local checkout and in CI
+mode, resolving the GitHub tag (`8f23d60`). No server change was needed.
+
+**Lesson:** before taking a Brain tag, check `git -C ../Brain describe --tags`
+against `brainTag`. They should match; if not, local results don't describe CI.
