@@ -546,3 +546,27 @@ therefore fails closed.
 
 **Not yet verified in production:** a real signed-in request. That needs the
 website served from the VM (D7, same origin) or CORS.
+
+### 2026-11-24 — S6b D7: website live at https://brain.corelearnly.com
+
+Built and deployed from the Website repo (`make deploy`, see its W2 entry):
+static files in `~/n8n/site/brain`, served by the shared Caddy. One Caddy
+block: `/v1/*` goes to `brain-server:8080` (1 MB body limit), and everything
+else is the single-page app (`try_files {path} /index.html`). `/assets/*`
+(hashed names) is cached for a year and immutable; `index.html` is `no-cache`;
+zstd/gzip. Website and API share one origin, so no CORS anywhere.
+
+**Verified against the VM** (the Mac's resolver was still caching the
+pre-record NXDOMAIN): Let's Encrypt certificate obtained, page 200, deep link
+`/today` 200, assets immutable and zstd-compressed, `/v1/me` 401 without a
+token. All six other sites 200.
+
+**A false alarm worth remembering.** My first attempt's safety check read
+only the **last line** of `caddy validate`. Caddy's log lines arrive in
+varying order, so a valid config looked invalid, and the backup was restored
+(correctly: nothing was reloaded). The check now looks for "Valid
+configuration" anywhere in the output, and prints it. Two backups exist from
+this step: `Caddyfile.bak-20261124-063648` and `…-063700`.
+
+**Production end to end is still unverified:** a real sign-in at
+brain.corelearnly.com, which needs the redirect URLs set in the Mumbai project.
