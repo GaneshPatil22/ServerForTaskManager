@@ -727,3 +727,84 @@ corrections so far).
 **Rollback:** M0005 only adds tables and nullable columns, and the old code
 names its columns, so setting `BRAIN_IMAGE_TAG=b4caf59` and
 `docker compose up -d` returns to the previous server without touching data.
+
+### 2026-11-24 — S6a: Brain 0.7.0 → 0.9.0, a live behaviour change
+
+Pinned to tag 0.9.0 (`0beb889`, verified on the remote). Source-compatible:
+`EnrichmentPipeline(timeZone:router:)` is unchanged, and `EnrichmentFeatures`
+was added and removed between tags, never shipped. `make ci` passes with
+`BRAIN_FROM_GIT=1` against the tag. What changes in production, all at once:
+
+- **Category escalates to T2** when the rules abstain. Brain measured 67.0% →
+  87.3% end-to-end, 90.8% precision on escalations (lexicon 88.0%).
+- **Effort escalates to T2**, measured poor (median calibrated confidence
+  0.393, 72% under a coin flip). Kept as shipped, Ganesh's call: for 2–3
+  months of solo use a guessed size beats "unknown", and he corrects sizes
+  by hand. Each edit is a correction against `t2`, so the record of how
+  wrong it is accumulates; nothing learns from it until T1 exists.
+- **T3 type questions are produced** when every rung abstains (stored by
+  S6b, which ships with this pin and not before).
+- Three T0 parser fixes (daypart leak, polluted referents, "due N days").
+- `EnrichmentResult.pendingReferences` exists and is **deliberately unread**:
+  the dependency backfill's first audit was 7 resolutions, 0 correct.
+
+**Quota**, checked against `aistudio.google.com/docs/rate-limits` today:
+Gemini Decision 1 free tier is 200 RPM, 50,000 TPM, 10,000 RPD; "applied
+per project, not per API key"; RPD resets at midnight Pacific (Brain's
+ledger already uses Pacific). Brain's dev split: **425 escalations** over
+415 captures (25 type + 271 effort + 129 category, each the measured T0
+abstention count), every one answered on the first rung, so about 1.02
+Decision 1 requests per capture: about 9,800 captures a day **for all users
+together** (the pool is the project's; `fairShare` divides it). Without
+effort it would be 154 per 415, about 27,000. Brain's replay also logged 174
+cassette-store misses: 87 `unknown` answers (64 effort, 23 category) times
+the 2 later rungs. Those were lookups, not requests. **Live they are real
+calls**: Brain's schema guard treats an explicit `unknown` like no answer, so
+the router asks the next rung (production passes no cassette store,
+`Application+build.swift`). Per pool, that is about **0.21 extra requests per
+capture to Gemma and 0.21 to Flash-Lite**, and they can chain: Gemma's
+`unknown` goes on to Flash-Lite, then to degrade, so the worst case is three
+calls for a field that stays unresolved. 64 of the 87 are effort.
+
+**The binding pool is Flash-Lite, not Decision 1.** Brain's rows: Gemma
+14,400/day, Flash-Lite **500/day**. At 0.21 per capture, Flash-Lite runs out
+at about 2,400 captures a day, which is ample for solo use but is the first
+limit hit at scale. It sits last on every ladder, so the scarcest quota gets
+the hardest cases. When it runs out the ladder degrades and the field stays
+unresolved; nothing fails. Those two rows come from Ganesh's AI Studio
+dashboard, not a public page; only Decision 1's is verified against Google's
+docs. Stopping the ladder on an explicit `unknown` would remove this spend.
+That is a Brain change and Ganesh's call; this entry describes today's
+behaviour.
+
+### 2026-11-24 — S6b: T3 questions are stored, answered, and become labels
+
+Brain asks (`UserQuestion`, field `type`) when every tier abstains on a
+capture's type. Until now the worker logged "questions not stored yet" and
+dropped them. That never fired in production: on Brain 0.7.0 a question was
+raised only by a T3 rung, and the production ladder has none. Asking on
+abstention arrived after 0.7.0 (Brain `55e99a2`), so this ships with the
+0.9.0 pin and not before.
+
+- **M0006 `questions`**, additive (one new table, RLS on). `item_id` is
+  NOT NULL and a foreign key (Ganesh's call over the brief's "nullable"):
+  every enrichment has an item, a failed capture's included, so a nullable
+  column could only ever mean an orphan. One question per item and field.
+  `answer` must be one of the stored `options` and `field` must be one the
+  server can apply (`type`), both as database CHECKs.
+- **Written in the enrichment's transaction.** No item, no question; a
+  retried enrichment writes neither.
+- **An answer** (one transaction, question and item locked): checked against
+  the *stored* options, never the client's; sets the field as the user's
+  decision (confidence 1); writes a correction with **tier `t3`**, `before`
+  the previous value (normally empty). `t3` is how `export-corrections`
+  tells these apart from edits of a model's guess: they are the only labels
+  no generator wrote. Same option again: 204, nothing written. A different
+  option: 409 `already_answered`, because changing one's mind is an item
+  edit, which records its own correction. Not an option: 400
+  `not_an_option`. Another user's question: 404, whatever the option.
+- **Editing an item's type closes its open question** in the edit's
+  transaction, with no second correction.
+
+Rollback: the previous image ignores the table. M0006 changes nothing that
+exists.

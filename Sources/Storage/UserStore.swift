@@ -282,7 +282,7 @@ public struct UserStore: Sendable {
         try await items(id: id, after: after, limit: limit, status: status, on: client)
     }
 
-    private func items(
+    func items(
         id: ULID?, after: ULID?, limit: Int?, status: ItemStatus?, on runner: some QueryRunner,
         lock: Bool = false
     ) async throws -> [Item] {
@@ -699,6 +699,12 @@ public struct UserStore: Sendable {
                 for correction in corrections {
                     try await insertCorrection(correction, on: connection)
                 }
+                // Setting the type by hand answers Brain's open question about
+                // it; the edit's own correction is the label, so none here.
+                if let type = change.type {
+                    try await closeQuestion(
+                        item: id, field: "type", answer: type.rawValue, at: date, on: connection)
+                }
                 return item
             }
         } catch  where sqlState(of: error) == "23503" {
@@ -773,15 +779,17 @@ public struct UserStore: Sendable {
         return graph
     }
 
-    /// Stores one enrichment atomically: the item, its suggested edges, and
-    /// the capture's new status, all or nothing.
+    /// Stores one enrichment atomically: the item, its suggested edges, the
+    /// questions Brain asked about it, and the capture's new status, all or
+    /// nothing.
     ///
     /// Returns false, and writes nothing, if the capture already has an item.
     /// The capture row is locked first, so two workers finishing the same
     /// capture cannot both write an item. A suggested edge that already exists
     /// is skipped, not an error.
     public func saveEnrichment(
-        capture: ULID, status: CaptureStatus, item: Item, edges: [Edge]
+        capture: ULID, status: CaptureStatus, item: Item, edges: [Edge],
+        questions: [StoredQuestion] = []
     ) async throws -> Bool {
         try await client.withTransaction(logger: logger) { connection in
             var locked = false
@@ -816,6 +824,9 @@ public struct UserStore: Sendable {
                     continue
                 }
                 _ = try await insertEdge(edge, on: connection, skipDuplicate: true)
+            }
+            for question in questions {
+                try await insertQuestion(question, on: connection)
             }
             try await connection.query(
                 """

@@ -403,7 +403,8 @@ paths:
   /v1/questions:
     get:
       operationId: listQuestions
-      summary: Questions Brain asks instead of guessing (tier T3). (S4)
+      summary: Questions Brain asks instead of guessing (tier T3).
+      description: This user's unanswered questions, newest first, at most 50.
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/QuestionList'}}}}
         default: {$ref: '#/components/responses/Problem'}
@@ -411,7 +412,13 @@ paths:
   /v1/questions/{id}/answer:
     post:
       operationId: answerQuestion
-      summary: Answer with one of the offered options. (S4)
+      summary: Answer with one of the offered options.
+      description: >-
+        Sets the item's field as the user's decision and records a `t3`
+        correction. Answering again with the same option changes nothing.
+        400 `not_an_option` if the option is not one of the question's own;
+        409 `already_answered` if it was answered with a different option
+        (edit the item instead).
       parameters: [{$ref: '#/components/parameters/Id'}]
       requestBody:
         required: true
@@ -927,7 +934,7 @@ components:
 
     Question:
       type: object
-      required: [id, captureId, field, prompt, options]
+      required: [id, captureId, itemId, field, prompt, options, createdAt]
       properties:
         id: {$ref: '#/components/schemas/ULID'}
         captureId: {$ref: '#/components/schemas/ULID'}
@@ -935,6 +942,7 @@ components:
         field: {type: string, description: 'What the answer sets, e.g. `type`.'}
         prompt: {type: string}
         options: {type: array, minItems: 2, items: {type: string}}
+        createdAt: {type: string, format: date-time}
     QuestionList:
       type: object
       required: [questions]

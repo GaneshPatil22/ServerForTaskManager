@@ -93,15 +93,31 @@ public struct Enricher: Sendable {
                     "dropped a suggested link", metadata: ["reason": "\(error)"])
             }
         }
-        if !result.questions.isEmpty {
-            // classifyType never asks today (Brain 0.5.0). Storing questions
-            // arrives with the questions endpoints (S4c).
+        // T3: what every tier abstained on becomes a question, stored with
+        // the item or not at all. A field the server cannot apply an answer
+        // to is counted and skipped, never stored half-usable.
+        var questions: [StoredQuestion] = []
+        var unanswerable = 0
+        for question in result.questions {
+            guard StoredQuestion.answerableFields.contains(question.field) else {
+                unanswerable += 1
+                continue
+            }
+            questions.append(
+                StoredQuestion(
+                    id: ids.next(), captureId: capture.id, itemId: result.item.id,
+                    field: question.field, prompt: question.prompt, options: question.options,
+                    createdAt: now))
+        }
+        if unanswerable > 0 {
             logger.warning(
-                "questions not stored yet", metadata: ["count": "\(result.questions.count)"])
+                "skipped questions about fields the server cannot apply",
+                metadata: ["count": "\(unanswerable)"])
         }
 
         let saved = try await store.saveEnrichment(
-            capture: capture.id, status: result.capture.status, item: result.item, edges: edges)
+            capture: capture.id, status: result.capture.status, item: result.item, edges: edges,
+            questions: questions)
         logTrace(result.trace, item: result.item, saved: saved)
         guard saved else { return .nothingToDo }
         return result.capture.status == .failed
@@ -147,6 +163,7 @@ public struct Enricher: Sendable {
                 "tiers": "\(trace.tierByField.mapValues(\.rawValue).sorted { $0.key < $1.key })",
                 "confidence": "\(Self.confidences(item))",
                 "unresolved": "\(trace.unresolved.sorted())",
+                "asked": "\(trace.askUser.sorted())",
                 "routed": "\(trace.routedCapabilities)",
                 "tokens": "\(trace.estimatedTokens)",
                 "redacted": "\(trace.redactedBeforeSending)",

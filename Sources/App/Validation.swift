@@ -9,6 +9,8 @@ import Storage
 enum Validation {
     static let maxCaptureLength = 20_000
     static let maxTitleLength = 500
+    /// Longer than any option Brain offers; checked again against the stored set.
+    static let maxOptionLength = 100
     static let defaultLimit = 100
     static let maxLimit = 500
 

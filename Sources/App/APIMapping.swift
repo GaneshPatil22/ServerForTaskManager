@@ -41,6 +41,15 @@ extension Components.Schemas.Goal {
     }
 }
 
+extension Components.Schemas.Question {
+    init(_ question: StoredQuestion) {
+        self.init(
+            id: question.id.rawValue, captureId: question.captureId.rawValue,
+            itemId: question.itemId.rawValue, field: question.field, prompt: question.prompt,
+            options: question.options, createdAt: question.createdAt)
+    }
+}
+
 extension Components.Schemas.Item {
     init(_ item: BrainCore.Item) {
         self.init(

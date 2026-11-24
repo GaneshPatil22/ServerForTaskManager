@@ -44,6 +44,33 @@ struct EnricherTests {
         #expect(stored.rawText == capture.rawText, "the capture itself is never changed")
     }
 
+    /// T3: a type no tier could read becomes a stored question about the
+    /// item, in the same write; running again asks nothing new.
+    @Test func anUnreadableTypeBecomesAStoredQuestion() async throws {
+        let store = try await TestDatabase.newUser()
+        // Over eight words, no imperative, no marker: Brain's T0 abstains.
+        let capture = try await storedCapture(
+            "the whole situation with the vendor and the pricing and everything else", in: store)
+        let worker = try await enricher()
+        guard
+            case .enriched(let itemID, _) = try await worker.enrich(
+                user: store.user, capture: capture.id)
+        else {
+            Issue.record("expected enriched")
+            return
+        }
+        #expect(try await store.item(itemID)?.type.value == nil)
+        let questions = try await store.openQuestions()
+        #expect(questions.count == 1)
+        let question = try #require(questions.first)
+        #expect(question.itemId == itemID && question.captureId == capture.id)
+        #expect(question.field == "type")
+        #expect(Set(question.options) == Set(ItemType.allCases.map(\.rawValue)))
+
+        _ = try await worker.enrich(user: store.user, capture: capture.id)
+        #expect(try await store.openQuestions().count == 1)
+    }
+
     @Test func runningTwiceMakesOneItem() async throws {
         let store = try await TestDatabase.newUser()
         let capture = try await storedCapture("buy milk", in: store)

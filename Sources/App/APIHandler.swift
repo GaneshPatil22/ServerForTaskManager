@@ -509,18 +509,18 @@ struct APIHandler: APIProtocol {
 
     // MARK: - Questions (T3)
     //
-    // Nothing creates questions yet: Brain's `judgeLink`, which will ask them,
-    // isn't routed (S5d). Until then the honest answers are "there are none"
-    // and "no such question", not "not implemented". A 501 also showed as a
-    // red console error in every browser on every page load.
+    // Brain asks when every tier abstains on a field; the worker stores the
+    // question with the item (M0006). An answer is the most valuable label
+    // in the system, the only one no generator wrote, so it is recorded as a
+    // `t3` correction for `export-corrections`.
 
     func listQuestions(_ input: Operations.ListQuestions.Input) async throws
         -> Operations.ListQuestions.Output
     {
         try await run(
             {
-                _ = try await store()  // still authenticated, still creates the user row
-                return .ok(.init(body: .json(.init(questions: []))))
+                let questions = try await store().openQuestions()
+                return .ok(.init(body: .json(.init(questions: questions.map { .init($0) }))))
             }, problem: { .default(statusCode: $0, $1) })
     }
 
@@ -529,11 +529,32 @@ struct APIHandler: APIProtocol {
     {
         try await run(
             {
-                _ = try check { () throws(Validation.Failure) in
-                    try Validation.ulid(input.path.id, field: "id")
+                let body =
+                    switch input.body {
+                    case .json(let body): body
+                    }
+                let (id, option) = try check { () throws(Validation.Failure) in
+                    (
+                        try Validation.ulid(input.path.id, field: "id"),
+                        try Validation.text(
+                            body.option, field: "option", max: Validation.maxOptionLength)
+                    )
                 }
-                _ = try await store()
-                throw Stop.notFound("question")
+                let answered: StoredQuestion?
+                do {
+                    answered = try await store().answerQuestion(
+                        id, option: option, at: clock(), correction: Self.mintULID())
+                } catch QuestionRefusal.notAnOption {
+                    throw Stop(
+                        status: 400, code: "not_an_option",
+                        message: "answer with one of the question's options")
+                } catch QuestionRefusal.alreadyAnswered {
+                    throw Stop(
+                        status: 409, code: "already_answered",
+                        message: "already answered; edit the item to change it")
+                }
+                guard answered != nil else { throw Stop.notFound("question") }
+                return .noContent(.init())
             }, problem: { .default(statusCode: $0, $1) })
     }
 }

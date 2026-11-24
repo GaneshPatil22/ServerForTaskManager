@@ -354,21 +354,100 @@ struct ItemGoalTests {
 }
 
 @Suite("Questions")
-struct NotYetTests {
-    /// Until Brain routes judgeLink, there are no questions: an empty list,
-    /// and answering any id is "not found".
-    @Test func noQuestionsUntilBrainAsksThem() async throws {
+struct QuestionAPITests {
+    /// A stored T3 question about an item whose type no tier could read.
+    func asked(_ me: Caller, _ client: some TestClientProtocol) async throws -> StoredQuestion {
+        _ = try await me.send(client, .get, "/v1/me")
+        let store = try await me.store()
+        let capture = Capture(id: newID(), rawText: "the garden thing", createdAt: now)
+        _ = try await store.insertCapture(capture)
+        let item = Item(
+            id: newID(), captureId: capture.id, title: "the garden thing", createdAt: now)
+        let question = StoredQuestion(
+            id: newID(), captureId: capture.id, itemId: item.id, field: "type",
+            prompt: "What is “the garden thing”?",
+            options: ["task", "idea", "note", "reminder", "link"], createdAt: now)
+        _ = try await store.saveEnrichment(
+            capture: capture.id, status: .enriched, item: item, edges: [],
+            questions: [question])
+        return question
+    }
+
+    func answer(_ q: StoredQuestion) -> String { "/v1/questions/\(q.id.rawValue)/answer" }
+
+    @Test func listAnswerAndLeaveTheList() async throws {
         let me = Caller()
-        try await testApp().test(.router) { client in
+        try await testApp(clock: { now }).test(.router) { client in
+            let q = try await asked(me, client)
             let list = try await me.send(client, .get, "/v1/questions")
             #expect(list.status == .ok)
-            #expect((list.body["questions"] as? [Any])?.isEmpty == true)
+            let rows = try #require(list.body["questions"] as? [[String: Any]])
+            #expect(rows.count == 1)
+            #expect(rows.first?["itemId"] as? String == q.itemId.rawValue)
+            #expect(rows.first?["options"] as? [String] == q.options)
 
-            let answer = try await me.send(
+            let r = try await me.send(client, .post, answer(q), json: ["option": "idea"])
+            #expect(r.status == .noContent)
+            let item = try await me.send(client, .get, "/v1/items/\(q.itemId.rawValue)")
+            let type = try #require(item.body["type"] as? [String: Any])
+            #expect(type["value"] as? String == "idea")
+            #expect(type["decidedBy"] as? String == "user")
+
+            let after = try await me.send(client, .get, "/v1/questions")
+            #expect((after.body["questions"] as? [Any])?.isEmpty == true)
+            let label = try #require(try await me.store().corrections().first)
+            #expect(label.tier == .t3 && label.afterValue == "idea")
+        }
+    }
+
+    @Test func answeringTwiceIsOneCorrection() async throws {
+        let me = Caller()
+        try await testApp().test(.router) { client in
+            let q = try await asked(me, client)
+            for _ in 0..<2 {
+                let r = try await me.send(client, .post, answer(q), json: ["option": "task"])
+                #expect(r.status == .noContent)
+            }
+            let changed = try await me.send(client, .post, answer(q), json: ["option": "note"])
+            #expect(changed.status == .conflict)
+            #expect(changed.body["code"] as? String == "already_answered")
+            #expect(try await me.store().corrections().count == 1)
+        }
+    }
+
+    @Test func anAnswerOutsideTheOptionsIs400() async throws {
+        let me = Caller()
+        try await testApp().test(.router) { client in
+            let q = try await asked(me, client)
+            for option in ["banana", "Task", ""] {
+                let r = try await me.send(client, .post, answer(q), json: ["option": option])
+                #expect(r.status == .badRequest, "\(option)")
+            }
+            let r = try await me.send(client, .post, answer(q), json: ["option": "banana"])
+            #expect(r.body["code"] as? String == "not_an_option")
+            #expect(try await me.store().corrections().isEmpty)
+        }
+    }
+
+    @Test func anotherUsersQuestionIs404Everywhere() async throws {
+        let me = Caller()
+        let them = Caller()
+        try await testApp().test(.router) { client in
+            let theirs = try await asked(them, client)
+            let list = try await me.send(client, .get, "/v1/questions")
+            #expect((list.body["questions"] as? [Any])?.isEmpty == true)
+            let r = try await me.send(client, .post, answer(theirs), json: ["option": "task"])
+            #expect(r.status == .notFound)
+            // A wrong option on someone else's question is still "not found",
+            // so the response says nothing about what they were asked.
+            let probe = try await me.send(client, .post, answer(theirs), json: ["option": "x"])
+            #expect(probe.status == .notFound)
+            #expect(try await them.store().corrections().isEmpty)
+
+            let missing = try await me.send(
                 client, .post, "/v1/questions/\(newID().rawValue)/answer",
                 json: ["option": "task"])
-            #expect(answer.status == .notFound)
-
+            #expect(missing.status == .notFound)
             let unauthenticated = try await client.execute(uri: "/v1/questions", method: .get) {
                 $0.status
             }
