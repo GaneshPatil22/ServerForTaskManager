@@ -708,3 +708,22 @@ isolation (another user's commitment is 404 everywhere), streak, move then
 done, a review with three misses and no stored rows for them, rollups, the
 swap correction, the journal. Also fixed two descriptions in the spec that
 YAML flow syntax had silently cut at a comma.
+
+### 2026-11-24 — P5: planner live in production (`brain-server:a15cdd4`)
+
+Built on the Mac (arm64), streamed with `docker save | ssh docker load`,
+`BRAIN_IMAGE_TAG=a15cdd4`, `docker compose up -d`. M0005 migrated against
+Supabase on start; healthy; 6.3 MB. `CORRECTIONS_EXPORT_SALT` generated
+(`openssl rand -hex 24`, never printed) and added to `~/brain/.env` (still
+600, backup kept) and the local `.env.production`.
+
+Checked from outside: `/health` 200, website 200, `/v1/plan` and
+`/v1/commitments` 401 without a token, and n8n, immich, vault, start and
+books all 200. The publishable key gets 401 from the data API on
+`commitments`, `occurrences`, `journal_entries`, `daily_plans`, `goals` and
+`_hb_pg_migrations`. `export-corrections` runs in the container (0
+corrections so far).
+
+**Rollback:** M0005 only adds tables and nullable columns, and the old code
+names its columns, so setting `BRAIN_IMAGE_TAG=b4caf59` and
+`docker compose up -d` returns to the previous server without touching data.
