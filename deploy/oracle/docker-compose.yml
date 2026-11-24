@@ -1,0 +1,30 @@
+# Brain server on the Oracle VM (~/brain). Same layout as the other apps:
+# no public port; the shared Caddy (in ~/n8n) reaches it on proxy_net by name.
+#
+#   deploy:  docker compose up -d          (in ~/brain)
+#   logs:    docker compose logs -f
+#   stop:    docker compose down           (other apps untouched)
+services:
+  brain-server:
+    # The tag is the git commit it was built from (BRAIN_IMAGE_TAG in .env).
+    image: brain-server:${BRAIN_IMAGE_TAG:?set BRAIN_IMAGE_TAG in .env}
+    container_name: brain-server
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Supabase's server root certificate, for DATABASE_TLS=verify-full.
+      - ./supabase-ca.crt:/app/supabase-ca.crt:ro
+    networks:
+      - proxy_net
+    # 1 OCPU / 6 GB VM shared with ten other containers. The server uses
+    # ~100-200 MB; the limit stops a leak from starving Immich and n8n.
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  proxy_net:
+    external: true

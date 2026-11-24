@@ -471,3 +471,37 @@ mode, resolving the GitHub tag (`8f23d60`). No server change was needed.
 
 **Lesson:** before taking a Brain tag, check `git -C ../Brain describe --tags`
 against `brainTag`. They should match; if not, local results don't describe CI.
+
+### 2026-11-24 — S6b: Oracle VM, surveyed before changing anything
+
+Decided by Ganesh: host on the existing Oracle VM; API at
+**brain-api.corelearnly.com**; the website on the same VM; Google AI key now.
+
+**The VM as it is** (read-only survey): Ampere ARM64, **1 OCPU, 5.8 GB RAM**,
+2 GB swap (0.5 GB used), 28 GB disk free, Ubuntu 22.04, **no IPv6**. Eleven
+containers (n8n, Immich, Vaultwarden, Glance, BookOrbit and their databases),
+about 1.8 GB together. **One shared Caddy** (v2.11.3, in `~/n8n`, config
+`~/n8n/conf/Caddyfile`) owns 80 and 443 and serves five `*.corelearnly.com`
+sites with automatic HTTPS. Apps join the external network `proxy_net` and
+publish no ports. DNS has one A record per subdomain, no wildcard.
+
+**What that changes:**
+- **Half the planned machine** (ADR-0001 assumed 2 OCPU / 8–12 GB). Running is
+  fine; compiling Swift there is not. Images are built on the Mac (also arm64)
+  and streamed over with `docker save | ssh docker load`. No registry, no tokens.
+  `WORKER_CONCURRENCY=2`, `mem_limit: 512m`, log rotation 3 × 10 MB.
+- **No IPv6:** the Supabase session pooler (IPv4) is the only option.
+- **Caddy is shared by five live sites.** A bad Caddyfile takes all of them
+  down. Every change: back up, `caddy validate`, then `caddy reload`.
+
+**Deployment files are versioned** in `deploy/oracle/` (compose file and env
+template). The filled `.env.production` is gitignored and goes to
+`~/brain/.env` with `chmod 600`. The image tag is the git commit it was built
+from.
+
+**Noticed, not changed:** Caddy runs unpinned `caddy:latest` and every site
+depends on it. Pinning it is Ganesh's call, since it's part of the n8n setup.
+
+**Done so far:** D1, image `brain-server:b4caf59` loaded on the VM (it gained
+curl and a Docker health check, verified healthy). D2, `~/brain` (mode 700)
+with the compose file. Nothing started; no existing container touched.
