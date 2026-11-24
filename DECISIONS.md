@@ -844,3 +844,18 @@ With 0.10.0 that is expected to be about 0. Brain reports accuracy unchanged
 project-wide); Flash-Lite (500/day, from Ganesh's dashboard, not a public
 page) should now see almost nothing. That is checked after deploy from
 `budget_model_daily`, not assumed.
+
+### 2026-11-24 — Brain 0.10.0 live (`brain-server:0bb7946`)
+
+Same procedure as `425785b` (`.env` backed up, mode 600). Healthy on start.
+From outside: `/health` 200, `/v1/questions` 401 without a token on both
+hosts, website and the five other sites 200, and the Supabase data API with
+the publishable key 401 for `questions`, `corrections` and
+`budget_model_daily`. Production Postgres is 17.12.
+
+Quota baseline before any 0.10.0 traffic (`budget_model_daily`):
+`gemini-decision-1` 3 today, 1 on 23 Nov; Gemma and Flash-Lite have never
+been called. No questions or corrections stored yet.
+
+Rollback: `BRAIN_IMAGE_TAG=425785b` (Brain 0.9.0) or `a15cdd4` (0.7.0, no
+questions), then `docker compose up -d`. No schema change since M0006.
