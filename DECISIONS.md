@@ -808,3 +808,15 @@ abstention arrived after 0.7.0 (Brain `55e99a2`), so this ships with the
 
 Rollback: the previous image ignores the table. M0006 changes nothing that
 exists.
+
+### 2026-11-24 — S6a+S6b live in production (`brain-server:425785b`)
+
+Built on the Mac (arm64) from the clean tree at `425785b`, streamed with
+`docker save | ssh docker load`, `BRAIN_IMAGE_TAG=425785b` (`.env` backed up
+first, still mode 600), `docker compose up -d`. M0006 migrated on start;
+healthy. From outside: `/health` 200, `/v1/questions` and `/v1/plan` 401
+without a token, website and the five other sites 200, and the Supabase data
+API with the publishable key 401 for `questions`.
+
+Rollback: `BRAIN_IMAGE_TAG=a15cdd4`, `docker compose up -d`. M0006 only added
+a table, which the old image never reads.
