@@ -26,5 +26,7 @@ struct SchemaDriftTests {
         #expect(Set(M.goalStatuses) == raw(GoalStatus.self))
         #expect(Set(M.edgeKinds) == raw(EdgeKind.self))
         #expect(Set(M.edgeSources) == raw(EdgeSource.self))
+        #expect(Set(M0005_Planner.commitmentKinds) == raw(CommitmentKind.self))
+        #expect(Weekday.allCases.map(\.rawValue) == Array(1...7))
     }
 }

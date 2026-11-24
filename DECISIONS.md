@@ -643,3 +643,32 @@ decimals, never the value). The model's name cannot be logged yet:
 `EnrichmentTrace` keeps only `routedCapabilities`, and Brain's router is
 designed so the pipeline never learns which rung answered. Requested from
 Brain.
+
+### 2026-11-24 — P2–P3: planner schema (M0005) and storage
+
+Tables per `Brain/docs/15-planner.md`, none of them `items`:
+- `commitments`: the rule as a discriminator plus `rule_weekday` / `rule_day` /
+  `rule_n`, one CHECK per shape (day 1–31, n 1–5, weekday 1–7; Brain accepts
+  any `Int`, the database refuses `monthlyOnDay(32)`). `minutes` 0–1440.
+  `note` ≤ 200 characters, never parsed or summed. `archived` for deletes.
+- `occurrences`: `(user, commitment, day)`, state `done | skipped | moved`,
+  `moved_to` required for moved and forbidden for skipped. No `missed`; no
+  rows generated ahead of time. Reads by range include rows moved *into* it.
+- `journal_entries`: one per `(user, day)`, ≤ 2,000 characters.
+- `goals`: `period` (CHECK on `2026-11` / `2026-Q4`) and `parent_id` (same
+  user, not itself). Whether a parent is a legitimate rollup is the API's
+  check (`canRollUp`), as Brain intends.
+- `daily_plans`: `(user, day)`, chosen and proposed item, `swapped` (CHECKed
+  to equal proposed ≠ chosen). A swap writes a `bigTask` correction against
+  T0 in the same transaction, once per change of choice, so a retry adds
+  nothing.
+
+**Found and fixed on the way:** postgres-migrations' `_hb_pg_migrations`
+table sits in `public` with RLS **off**. Not reachable on the current
+Supabase project (it grants `anon` nothing), but it is exactly what the
+security advisor flags. M0005 enables RLS on it; the server owns the table,
+so it is unaffected. A new catalog test now fails for any `public` table
+with RLS off or (user data) without `user_id`, including future ones.
+
+Verified: 41 storage tests, and M0005 applied on the populated dev database
+on top of M0004 with rows kept.

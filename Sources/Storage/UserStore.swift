@@ -133,9 +133,9 @@ public struct UserStore: Sendable {
     public func insertGoal(_ goal: Goal) async throws -> (goal: Goal, created: Bool) {
         let created = try await returnsRow(
             """
-            INSERT INTO goals (user_id, id, title, status, created_at)
+            INSERT INTO goals (user_id, id, title, status, created_at, period, parent_id)
             VALUES (\(uid), \(goal.id.rawValue), \(goal.title), \(goal.status.rawValue),
-                    \(goal.createdAt))
+                    \(goal.createdAt), \(goal.period?.description), \(goal.parentId?.rawValue))
             ON CONFLICT DO NOTHING
             RETURNING id
             """)
@@ -148,6 +148,26 @@ public struct UserStore: Sendable {
 
     public func goal(_ id: ULID) async throws -> Goal? {
         try await goals(id: id).first
+    }
+
+    /// Writes title, status, period and parent as given. Returns false if no
+    /// such goal for this user. Whether the parent is a legitimate rollup is
+    /// the caller's check (`Goal.canRollUp`); the database only guarantees the
+    /// parent is this user's goal.
+    @discardableResult
+    public func replaceGoal(_ goal: Goal) async throws -> Bool {
+        try await returnsRow(
+            """
+            UPDATE goals
+            SET title = \(goal.title), status = \(goal.status.rawValue),
+                period = \(goal.period?.description), parent_id = \(goal.parentId?.rawValue)
+            WHERE user_id = \(uid) AND id = \(goal.id.rawValue) RETURNING id
+            """)
+    }
+
+    /// Goals of one month or quarter.
+    public func goals(in period: GoalPeriod) async throws -> [Goal] {
+        try await goals(id: nil).filter { $0.period == period }
     }
 
     /// Changes only what is passed. Returns nil if no such goal for this user.
@@ -174,7 +194,7 @@ public struct UserStore: Sendable {
         var result: [Goal] = []
         let rows = try await client.query(
             """
-            SELECT id, title, status, created_at FROM goals
+            SELECT id, title, status, created_at, period, parent_id FROM goals
             WHERE user_id = \(uid) AND (\(id)::text IS NULL OR id = \(id)::text)
             ORDER BY id
             """,
@@ -184,7 +204,13 @@ public struct UserStore: Sendable {
             result.append(
                 Goal(
                     id: try r.ulid("id"), title: try r.value("title"),
-                    status: try r.enumValue("status"), createdAt: try r.value("created_at")))
+                    status: try r.enumValue("status"), createdAt: try r.value("created_at"),
+                    period: try r.value("period", as: String?.self).map {
+                        try r.parse($0, column: "period", GoalPeriod.init(storedValue:))
+                    },
+                    parentId: try r.value("parent_id", as: String?.self).map {
+                        try r.parse($0, column: "parent_id", ULID.init)
+                    }))
         }
         return result
     }
@@ -802,7 +828,7 @@ public struct UserStore: Sendable {
 
     // MARK: - Helpers
 
-    private func returnsRow(_ query: PostgresQuery) async throws -> Bool {
+    func returnsRow(_ query: PostgresQuery) async throws -> Bool {
         for try await _ in try await client.query(query, logger: logger) { return true }
         return false
     }
