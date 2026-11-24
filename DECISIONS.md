@@ -580,3 +580,21 @@ separately hosted website wouldn't be usable. Serving ~700 KB of cached static
 files costs the VM almost nothing, and it is already working (`make deploy`).
 **Revisit if:** users far from India, preview deploys become wanted, or the VM
 gets crowded (then move the API first, not the website).
+
+### 2026-11-24 — Production verified end to end, model path included
+
+Ganesh signed in at https://brain.corelearnly.com with **Google** (W3) and
+captured seven things. Read from the VM's log: all seven stored and enriched,
+with no errors, refusals or budget problems. Six had their type settled by the
+rules (T0, `tokens=0`), including a short vague one. Brain files a verbless
+capture of eight words or fewer as a `note`, and abstains only when longer.
+A deliberately long, verbless capture was the **first live model call**:
+`routed=["classifyType"]`, type decided at **T2**, `tokens=200` (estimate,
+in line with Brain's ~281 measured for Decision 1), saved.
+
+So every link has run in production: Google sign-in → website → API (same
+origin) → Supabase Postgres (verify-full) → worker → Gemini → stored, with the
+daily budget kept in Postgres.
+
+**Gap noticed:** the log names the tier but not *which* model answered, or
+with what confidence. Worth adding before there are real users to watch.
