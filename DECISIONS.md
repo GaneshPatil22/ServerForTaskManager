@@ -672,3 +672,39 @@ with RLS off or (user data) without `user_id`, including future ones.
 
 Verified: 41 storage tests, and M0005 applied on the populated dev database
 on top of M0004 with rows kept.
+
+### 2026-11-24 — P4: planner API
+
+Contract first (`openapi.yaml`), then handlers (`APIHandler+Planner.swift`).
+- `/v1/commitments` CRUD. DELETE archives and sets `endOn` to today, so
+  later days never count as missed; history stays.
+- `PUT|DELETE /v1/commitments/{id}/occurrences/{day}`: `not_scheduled` if the
+  rule does not put it on that day; done refused for a day not yet come
+  (`in_future`); moved needs a different `movedTo`. Done after a move keeps
+  `moved_to` and counts for the original day (decision 3).
+- `GET /v1/occurrences?from&through`: expanded on read (≤ 92 days), with
+  moved-in occurrences; place each on `movedTo ?? day`.
+- `/v1/journal` (≤ 2,000 characters, one per day, not in the future).
+- `/v1/daily-plans`: confirm yesterday/today/tomorrow only; the item must be
+  open; a swap is a `bigTask` correction (D4).
+- `GET /v1/review`: per commitment expected / done / skipped / moved /
+  missed, Brain's hit rate and streak; goals overlapping the range with their
+  rolled-up children; journal count; big tasks confirmed and swapped.
+- Goals take `period` and `parentId`; `?period=` filters. A bad rollup is
+  400 `invalid_rollup`, including moving a quarter so a month child no longer
+  fits (Brain's `canRollUp`, which Brain deliberately leaves to the writer).
+- `/v1/plan` gains `day`, `commitments` (Brain's section with each
+  occurrence's state, plus anything moved into today, marked `movedFrom`),
+  `committedMinutes` (only what is still owed: done, skipped and moved-away
+  are not) and `bigTask`. `ranked` is untouched: tested that a commitment
+  never appears in it.
+
+Clearing an optional field is an explicit `clear: [...]` list, because the
+generator decodes an absent field and `null` to the same `nil`.
+
+Tested: the 02:00 IST Monday / Sunday-in-UTC case (an Indian user sees
+Monday's ritual, a UTC user Sunday's), the validation codes above,
+isolation (another user's commitment is 404 everywhere), streak, move then
+done, a review with three misses and no stored rows for them, rollups, the
+swap correction, the journal. Also fixed two descriptions in the spec that
+YAML flow syntax had silently cut at a comma.

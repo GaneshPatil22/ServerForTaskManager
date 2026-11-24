@@ -241,7 +241,14 @@ struct APIHandler: APIProtocol {
     {
         try await run(
             {
-                let goals = try await store().goals()
+                let period = try check { () throws(Validation.Failure) in
+                    try Validation.optionalPeriod(input.query.period, field: "period")
+                }
+                let store = try await store()
+                let goals =
+                    if let period { try await store.goals(in: period) } else {
+                        try await store.goals()
+                    }
                 return .ok(
                     .init(body: .json(.init(goals: goals.map(Components.Schemas.Goal.init)))))
             }, problem: { .default(statusCode: $0, $1) })
@@ -256,15 +263,18 @@ struct APIHandler: APIProtocol {
                     switch input.body {
                     case .json(let body): body
                     }
-                let (id, title) = try check { () throws(Validation.Failure) in
-                    (
-                        try Validation.ulid(body.id, field: "id"),
-                        try Validation.text(
-                            body.title, field: "title", max: Validation.maxTitleLength)
-                    )
+                let goal = try check { () throws(Validation.Failure) in
+                    Goal(
+                        id: try Validation.ulid(body.id, field: "id"),
+                        title: try Validation.text(
+                            body.title, field: "title", max: Validation.maxTitleLength),
+                        createdAt: clock(),
+                        period: try Validation.optionalPeriod(body.period, field: "period"),
+                        parentId: try Validation.optionalULID(body.parentId, field: "parentId"))
                 }
-                let (stored, created) = try await store().insertGoal(
-                    Goal(id: id, title: title, createdAt: clock()))
+                let store = try await store()
+                try await checkRollUp(goal, store: store)
+                let (stored, created) = try await store.insertGoal(goal)
                 let json = Components.Schemas.Goal(stored)
                 return created ? .created(.init(body: .json(json))) : .ok(.init(body: .json(json)))
             }, problem: { .default(statusCode: $0, $1) })
@@ -279,21 +289,56 @@ struct APIHandler: APIProtocol {
                     switch input.body {
                     case .json(let body): body
                     }
-                let (id, title) = try check { () throws(Validation.Failure) in
-                    (
-                        try Validation.ulid(input.path.id, field: "id"),
-                        try body.title.map { title throws(Validation.Failure) in
-                            try Validation.text(
-                                title, field: "title", max: Validation.maxTitleLength)
-                        }
-                    )
+                let id = try check { () throws(Validation.Failure) in
+                    try Validation.ulid(input.path.id, field: "id")
                 }
-                guard
-                    let goal = try await store().updateGoal(
-                        id, title: title, status: body.status.map { convert($0) })
-                else { throw Stop.notFound("goal") }
+                let store = try await store()
+                guard var goal = try await store.goal(id) else { throw Stop.notFound("goal") }
+                let clear = Set(body.clear ?? [])
+                goal = try check { () throws(Validation.Failure) in
+                    if clear.contains(.period) && body.period != nil
+                        || clear.contains(.parentId) && body.parentId != nil
+                    {
+                        throw Validation.Failure(
+                            code: "conflicting_clear", message: "a field is both sent and cleared")
+                    }
+                    var g = goal
+                    if let title = body.title {
+                        g.title = try Validation.text(
+                            title, field: "title", max: Validation.maxTitleLength)
+                    }
+                    if let status = body.status { g.status = convert(status) }
+                    if let period = body.period {
+                        g.period = try Validation.period(period, field: "period")
+                    }
+                    if let parentId = body.parentId {
+                        g.parentId = try Validation.ulid(parentId, field: "parentId")
+                    }
+                    if clear.contains(.period) { g.period = nil }
+                    if clear.contains(.parentId) { g.parentId = nil }
+                    return g
+                }
+                try await checkRollUp(goal, store: store)
+                guard try await store.replaceGoal(goal) else { throw Stop.notFound("goal") }
                 return .ok(.init(body: .json(.init(goal))))
             }, problem: { .default(statusCode: $0, $1) })
+    }
+
+    /// Brain leaves rollups to the writer (`Goal.canRollUp`): a month goal
+    /// may name a quarter goal that contains it, and a goal's period may not
+    /// change in a way that strands the month goals rolling up into it.
+    func checkRollUp(_ goal: Goal, store: UserStore) async throws {
+        let invalid = Stop.badRequest(
+            "invalid_rollup", "a month goal can roll up only into the quarter containing it")
+        if let parentId = goal.parentId {
+            guard let parent = try await store.goal(parentId) else {
+                throw Stop.notFound("goal")
+            }
+            guard goal.canRollUp(into: parent) else { throw invalid }
+        }
+        for child in try await store.goals() where child.parentId == goal.id {
+            guard child.canRollUp(into: goal) else { throw invalid }
+        }
     }
 
     // MARK: - Later steps (501 until then)
@@ -344,9 +389,17 @@ struct APIHandler: APIProtocol {
             {
                 let store = try await store()
                 let now = clock()
+                let calendar = try await calendar(for: store)
+                let today = CalendarDay(now, in: calendar.timeZone)
+                let stored = try await store.commitments()
+                let completed = try await completed(store, today: today)
                 let outputs = BrainCore.Brain.compute(
-                    graph: try await store.graph(), now: now,
-                    calendar: try await calendar(for: store))
+                    graph: try await store.graph(), now: now, calendar: calendar,
+                    commitments: stored.map(\.commitment), completed: completed)
+                let (section, owed) = try await commitmentsSection(
+                    outputs, stored: stored, completed: completed, store: store)
+                let bigTask = try await store.dailyPlans(from: outputs.day, through: outputs.day)
+                    .first
                 return .ok(
                     .init(
                         body: .json(
@@ -356,7 +409,9 @@ struct APIHandler: APIProtocol {
                                 quickWins: outputs.quickWins.map(
                                     Components.Schemas.RankedItem.init),
                                 blocked: outputs.blocked.map(Components.Schemas.BlockedItem.init),
-                                computedAt: now))))
+                                computedAt: now, day: outputs.day.description,
+                                commitments: section, committedMinutes: owed,
+                                bigTask: bigTask.map(Components.Schemas.DailyPlan.init)))))
             }, problem: { .default(statusCode: $0, $1) })
     }
 

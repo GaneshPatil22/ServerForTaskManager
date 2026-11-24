@@ -128,7 +128,12 @@ paths:
   /v1/goals:
     get:
       operationId: listGoals
-      summary: All goals. (S3)
+      summary: All goals, or one month's or quarter's. (S3, P4)
+      parameters:
+        - name: period
+          in: query
+          description: Only goals of this period, e.g. `2026-11` or `2026-Q4`.
+          schema: {$ref: '#/components/schemas/Period'}
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/GoalList'}}}}
         default: {$ref: '#/components/responses/Problem'}
@@ -146,7 +151,12 @@ paths:
   /v1/goals/{id}:
     patch:
       operationId: updateGoal
-      summary: Rename a goal or change its status. (S3)
+      summary: Rename a goal, change its status, period or parent. (S3, P4)
+      description: |
+        A month goal may name a quarter goal as its parent only if that
+        quarter contains the month; anything else is 400 `invalid_rollup`.
+        Changing a quarter's period is refused the same way if a month goal
+        rolling up into it would no longer fit.
       parameters: [{$ref: '#/components/parameters/Id'}]
       requestBody:
         required: true
@@ -166,8 +176,187 @@ paths:
         `next` is the top item that can be started now, and is absent when
         nothing can. A blocked item may still rank first in `ranked`, with
         its blockers listed in `blocked`.
+
+        `commitments` is today's standing commitments, a **separate section**:
+        commitments are scheduled, never ranked, and never appear in
+        `ranked`. `day` is today in the user's timezone. `committedMinutes`
+        is what is still owed to them today; nothing subtracts it for you.
+        `bigTask` is today's confirmed big task, if the user confirmed one.
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Plan'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/commitments:
+    get:
+      operationId: listCommitments
+      summary: The user's commitments (habits, rituals, payments, blocks). (P4)
+      description: Archived (deleted) ones are left out.
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/CommitmentList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      operationId: createCommitment
+      summary: Commit to something that recurs. (P4)
+      description: |
+        Commitments are not items: they are scheduled, never ranked. Only the
+        rule is stored; the days it falls on are worked out when asked for.
+        `note` is free text such as "22k" and is never parsed or added up.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/NewCommitment'}}}
+      responses:
+        '201': {description: Created., content: {application/json: {schema: {$ref: '#/components/schemas/Commitment'}}}}
+        '200': {description: Already created with this id., content: {application/json: {schema: {$ref: '#/components/schemas/Commitment'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/commitments/{id}:
+    get:
+      operationId: getCommitment
+      summary: One commitment. (P4)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Commitment'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    patch:
+      operationId: updateCommitment
+      summary: Change a commitment. Only the fields sent change. (P4)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CommitmentUpdate'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Commitment'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      operationId: deleteCommitment
+      summary: Delete a commitment. Its history stays for the reviews. (P4)
+      description: |
+        The commitment disappears from lists and the plan and ends today; the
+        days it was done stay, so past reviews do not change.
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '204': {description: Deleted.}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/commitments/{id}/occurrences/{day}:
+    put:
+      operationId: setOccurrence
+      summary: Mark one day of a commitment done, skipped or moved. (P4)
+      description: |
+        `day` is a day the commitment falls on (400 `not_scheduled`
+        otherwise). Done is refused for a day that has not come yet
+        (400 `in_future`). Moving needs `movedTo`; the occurrence then shows
+        on that day, and marking it done later counts for the original day.
+        There is no "missed": a day left alone is a miss once it has passed.
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/Day'}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/OccurrenceUpdate'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Occurrence'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      operationId: clearOccurrence
+      summary: Undo. The day goes back to having no state. (P4)
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/Day'}
+      responses:
+        '204': {description: 'Cleared, or there was nothing to clear.'}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/occurrences:
+    get:
+      operationId: listOccurrences
+      summary: Every day each commitment falls on in a range, with its state. (P4)
+      description: |
+        Worked out on request from the rules; at most 92 days. An occurrence
+        moved into the range from outside it is included; place each one on
+        `movedTo` if present, otherwise on `day`.
+      parameters:
+        - {$ref: '#/components/parameters/From'}
+        - {$ref: '#/components/parameters/Through'}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/OccurrenceList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/journal:
+    get:
+      operationId: listJournal
+      summary: Journal entries in a range, oldest first. At most 92 days. (P4)
+      parameters:
+        - {$ref: '#/components/parameters/From'}
+        - {$ref: '#/components/parameters/Through'}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/JournalList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/journal/{day}:
+    put:
+      operationId: writeJournal
+      summary: Write the day's entry, replacing any earlier text. (P4)
+      description: One entry per day. Not an item. A day that has not come yet is 400 `in_future`.
+      parameters: [{$ref: '#/components/parameters/Day'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/JournalWrite'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/JournalEntry'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      operationId: deleteJournal
+      summary: Delete the day's entry. (P4)
+      parameters: [{$ref: '#/components/parameters/Day'}]
+      responses:
+        '204': {description: 'Deleted, or there was none.'}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/daily-plans:
+    get:
+      operationId: listDailyPlans
+      summary: Confirmed big tasks in a range. At most 92 days. (P4)
+      parameters:
+        - {$ref: '#/components/parameters/From'}
+        - {$ref: '#/components/parameters/Through'}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/DailyPlanList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/daily-plans/{day}:
+    put:
+      operationId: confirmDailyPlan
+      summary: Confirm the day's big task. Choosing another than Brain's is a swap. (P4)
+      description: |
+        Send the item Brain proposed (the plan's `next` as shown) as
+        `proposedItemId`. If `itemId` differs, the swap is recorded as a
+        correction: it is what teaches the ranking. `day` may be yesterday,
+        today or tomorrow (the evening planning ritual), else 400
+        `day_out_of_range`. The item must be open (400 `item_not_open`).
+      parameters: [{$ref: '#/components/parameters/Day'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/DailyPlanConfirm'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/DailyPlan'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/review:
+    get:
+      operationId: getReview
+      summary: How a week, month or quarter went. At most 92 days. (P4)
+      description: |
+        Per commitment: days expected, done, skipped, moved and not yet done,
+        missed, the hit rate and the current streak. Goals whose month or
+        quarter overlaps the range, each with the month goals rolling up into
+        it. Counts of journal entries and confirmed big tasks, and how many
+        were swaps. No amounts are ever added up.
+      parameters:
+        - {$ref: '#/components/parameters/From'}
+        - {$ref: '#/components/parameters/Through'}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Review'}}}}
         default: {$ref: '#/components/responses/Problem'}
 
   /v1/edges:
@@ -250,6 +439,22 @@ components:
       in: query
       description: Return rows after this id. Use `nextCursor` from the previous page.
       schema: {$ref: '#/components/schemas/ULID'}
+    Day:
+      name: day
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Day'}
+    From:
+      name: from
+      in: query
+      required: true
+      schema: {$ref: '#/components/schemas/Day'}
+    Through:
+      name: through
+      in: query
+      required: true
+      description: Inclusive.
+      schema: {$ref: '#/components/schemas/Day'}
     Limit:
       name: limit
       in: query
@@ -424,11 +629,19 @@ components:
       properties:
         id: {$ref: '#/components/schemas/ULID'}
         title: {type: string, minLength: 1, maxLength: 500}
+        period: {$ref: '#/components/schemas/Period'}
+        parentId: {$ref: '#/components/schemas/ULID'}
     GoalUpdate:
       type: object
       properties:
         title: {type: string, minLength: 1, maxLength: 500}
         status: {$ref: '#/components/schemas/GoalStatus'}
+        period: {$ref: '#/components/schemas/Period'}
+        parentId: {$ref: '#/components/schemas/ULID'}
+        clear:
+          type: array
+          description: Fields to remove. A field may not be both sent and cleared.
+          items: {type: string, enum: [period, parentId]}
     Goal:
       type: object
       required: [id, title, status, createdAt]
@@ -437,6 +650,9 @@ components:
         title: {type: string}
         status: {$ref: '#/components/schemas/GoalStatus'}
         createdAt: {type: string, format: date-time}
+        period: {$ref: '#/components/schemas/Period'}
+        periodText: {type: string, description: 'For display, e.g. "November 2026", "Q4 2026".'}
+        parentId: {$ref: '#/components/schemas/ULID'}
     GoalList:
       type: object
       required: [goals]
@@ -504,13 +720,210 @@ components:
         blockedBy: {type: array, items: {$ref: '#/components/schemas/ULID'}, description: Open items that must finish first.}
     Plan:
       type: object
-      required: [ranked, quickWins, blocked, computedAt]
+      required: [ranked, quickWins, blocked, computedAt, day, commitments, committedMinutes]
       properties:
         next: {$ref: '#/components/schemas/RankedItem'}
         ranked: {type: array, items: {$ref: '#/components/schemas/RankedItem'}}
         quickWins: {type: array, items: {$ref: '#/components/schemas/RankedItem'}}
         blocked: {type: array, items: {$ref: '#/components/schemas/BlockedItem'}}
         computedAt: {type: string, format: date-time}
+        day: {$ref: '#/components/schemas/Day'}
+        commitments: {type: array, items: {$ref: '#/components/schemas/ScheduledCommitment'}}
+        committedMinutes: {type: integer, minimum: 0}
+        bigTask: {$ref: '#/components/schemas/DailyPlan'}
+    ScheduledCommitment:
+      type: object
+      description: |
+        One commitment on the plan's day. Payments and rituals first, then
+        blocks, then habits. `state` absent means nothing recorded yet.
+        `movedFrom` is set when it was moved here from another day (mark it
+        with that day); `movedTo` when it was moved away from today.
+      required: [commitment]
+      properties:
+        commitment: {$ref: '#/components/schemas/Commitment'}
+        state: {$ref: '#/components/schemas/OccurrenceState'}
+        movedFrom: {$ref: '#/components/schemas/Day'}
+        movedTo: {$ref: '#/components/schemas/Day'}
+
+    Day:
+      type: string
+      description: A calendar day, `YYYY-MM-DD`, in the user's timezone.
+      pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+      example: '2026-11-24'
+    Period:
+      type: string
+      description: 'A month (`2026-11`) or a calendar quarter (`2026-Q4`; Q1 is January to March).'
+      pattern: '^[0-9]{4}-(0[1-9]|1[0-2]|Q[1-4])$'
+      example: 2026-Q4
+
+    CommitmentKind:
+      type: string
+      description: '`habit` read 10 pages · `ritual` Sunday review · `payment` rent on the 4th · `block` Friday 3h office block.'
+      enum: [habit, ritual, payment, block]
+    Weekday: {type: string, enum: [sunday, monday, tuesday, wednesday, thursday, friday, saturday]}
+    Rule:
+      type: object
+      description: |
+        One of five shapes, and only the fields that shape uses (400
+        `invalid_rule` otherwise):
+        `daily` · `weeklyOn` + weekday · `monthlyOnDay` + day (1–31; the 31st
+        falls on the month's last day when shorter) · `monthlyOnNthWeekday` +
+        n (1–5) + weekday · `quarterlyOnNthWeekday` + n + weekday (in January,
+        April, July, October). A fifth weekday skips months that have none.
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [daily, weeklyOn, monthlyOnDay, monthlyOnNthWeekday, quarterlyOnNthWeekday]}
+        weekday: {$ref: '#/components/schemas/Weekday'}
+        day: {type: integer, minimum: 1, maximum: 31}
+        n: {type: integer, minimum: 1, maximum: 5}
+    NewCommitment:
+      type: object
+      required: [id, title, kind, rule, minutes]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        title: {type: string, minLength: 1, maxLength: 200}
+        kind: {$ref: '#/components/schemas/CommitmentKind'}
+        rule: {$ref: '#/components/schemas/Rule'}
+        minutes: {type: integer, minimum: 0, maximum: 1440, description: 'The time it takes, as the user states it.'}
+        category: {$ref: '#/components/schemas/Category'}
+        goalId: {$ref: '#/components/schemas/ULID'}
+        startOn: {$ref: '#/components/schemas/Day'}
+        endOn: {$ref: '#/components/schemas/Day'}
+        paused: {type: boolean, default: false}
+        note: {type: string, maxLength: 200, description: 'Free text, e.g. "22k". Never parsed, never added up.'}
+    CommitmentUpdate:
+      type: object
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        kind: {$ref: '#/components/schemas/CommitmentKind'}
+        rule: {$ref: '#/components/schemas/Rule'}
+        minutes: {type: integer, minimum: 0, maximum: 1440}
+        category: {$ref: '#/components/schemas/Category'}
+        goalId: {$ref: '#/components/schemas/ULID'}
+        startOn: {$ref: '#/components/schemas/Day'}
+        endOn: {$ref: '#/components/schemas/Day'}
+        paused: {type: boolean}
+        note: {type: string, maxLength: 200}
+        clear:
+          type: array
+          description: Fields to remove. A field may not be both sent and cleared.
+          items: {type: string, enum: [category, goalId, endOn, note]}
+    Commitment:
+      type: object
+      required: [id, title, kind, rule, ruleText, minutes, startOn, paused, streak, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        title: {type: string}
+        kind: {$ref: '#/components/schemas/CommitmentKind'}
+        rule: {$ref: '#/components/schemas/Rule'}
+        ruleText: {type: string, example: Every Friday}
+        minutes: {type: integer}
+        category: {$ref: '#/components/schemas/Category'}
+        goalId: {$ref: '#/components/schemas/ULID'}
+        startOn: {$ref: '#/components/schemas/Day'}
+        endOn: {$ref: '#/components/schemas/Day'}
+        paused: {type: boolean}
+        note: {type: string}
+        streak: {type: integer, minimum: 0, description: Consecutive done occurrences up to today. Today not yet done does not break it.}
+        nextOn: {$ref: '#/components/schemas/Day'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CommitmentList:
+      type: object
+      required: [commitments]
+      properties:
+        commitments: {type: array, items: {$ref: '#/components/schemas/Commitment'}}
+
+    OccurrenceState: {type: string, enum: [done, skipped, moved]}
+    OccurrenceUpdate:
+      type: object
+      required: [state]
+      properties:
+        state: {$ref: '#/components/schemas/OccurrenceState'}
+        movedTo: {$ref: '#/components/schemas/Day'}
+    Occurrence:
+      type: object
+      required: [commitmentId, day]
+      properties:
+        commitmentId: {$ref: '#/components/schemas/ULID'}
+        day: {$ref: '#/components/schemas/Day'}
+        state: {$ref: '#/components/schemas/OccurrenceState'}
+        movedTo: {$ref: '#/components/schemas/Day'}
+    OccurrenceList:
+      type: object
+      required: [occurrences]
+      properties:
+        occurrences: {type: array, items: {$ref: '#/components/schemas/Occurrence'}}
+
+    JournalWrite:
+      type: object
+      required: [body]
+      properties:
+        body: {type: string, minLength: 1, maxLength: 2000}
+    JournalEntry:
+      type: object
+      required: [day, body, createdAt, updatedAt]
+      properties:
+        day: {$ref: '#/components/schemas/Day'}
+        body: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    JournalList:
+      type: object
+      required: [entries]
+      properties:
+        entries: {type: array, items: {$ref: '#/components/schemas/JournalEntry'}}
+
+    DailyPlanConfirm:
+      type: object
+      required: [itemId]
+      properties:
+        itemId: {$ref: '#/components/schemas/ULID'}
+        proposedItemId: {$ref: '#/components/schemas/ULID'}
+    DailyPlan:
+      type: object
+      required: [day, itemId, swapped, confirmedAt]
+      properties:
+        day: {$ref: '#/components/schemas/Day'}
+        itemId: {$ref: '#/components/schemas/ULID'}
+        proposedItemId: {$ref: '#/components/schemas/ULID'}
+        swapped: {type: boolean}
+        confirmedAt: {type: string, format: date-time}
+    DailyPlanList:
+      type: object
+      required: [plans]
+      properties:
+        plans: {type: array, items: {$ref: '#/components/schemas/DailyPlan'}}
+
+    CommitmentReview:
+      type: object
+      required: [commitment, expected, done, skipped, moved, missed, streak]
+      properties:
+        commitment: {$ref: '#/components/schemas/Commitment'}
+        expected: {type: integer, description: Days in the range it fell on.}
+        done: {type: integer}
+        skipped: {type: integer}
+        moved: {type: integer, description: Moved to a day that has not passed yet.}
+        missed: {type: integer, description: 'Passed with nothing recorded, or moved to a day that passed undone.'}
+        hitRate: {type: number, minimum: 0, maximum: 1, description: Done over expected. Absent when nothing was expected.}
+        streak: {type: integer, minimum: 0}
+    GoalReview:
+      type: object
+      required: [goal, children]
+      properties:
+        goal: {$ref: '#/components/schemas/Goal'}
+        children: {type: array, items: {$ref: '#/components/schemas/Goal'}, description: Month goals rolling up into this quarter goal.}
+    Review:
+      type: object
+      required: [from, through, commitments, goals, journalEntries, bigTasksConfirmed, bigTasksSwapped]
+      properties:
+        from: {$ref: '#/components/schemas/Day'}
+        through: {$ref: '#/components/schemas/Day'}
+        commitments: {type: array, items: {$ref: '#/components/schemas/CommitmentReview'}}
+        goals: {type: array, items: {$ref: '#/components/schemas/GoalReview'}}
+        journalEntries: {type: integer}
+        bigTasksConfirmed: {type: integer}
+        bigTasksSwapped: {type: integer}
 
     Question:
       type: object
@@ -531,4 +944,4 @@ components:
       type: object
       required: [option]
       properties:
-        option: {type: string, description: One of the question's `options`, exactly.}
+        option: {type: string, description: "One of the question's `options`, exactly."}
