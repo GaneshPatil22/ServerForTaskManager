@@ -598,3 +598,27 @@ daily budget kept in Postgres.
 
 **Gap noticed:** the log names the tier but not *which* model answered, or
 with what confidence. Worth adding before there are real users to watch.
+
+### 2026-11-24 — Planner step 3 begins: Brain 0.7.0 (P0)
+
+Brain 0.7.0 adds commitments, period goals and the plan's commitments section
+(`../Brain/docs/15-planner.md`, accepted by Ganesh today). The pin was
+`exact: "0.6.0"`, not `from: "0.5.1"` as the Brain session's note assumed, so
+a one-line bump was needed. Verified: `make ci` passes (48 tests, lint clean)
+against the local checkout, which is the 0.7.0 tag (`2a9cac3`), and
+`BRAIN_FROM_GIT=1 swift build` builds from the tag as Docker does. No server
+code changed; plan results are unchanged because no goal has a period yet and
+no commitments are passed.
+
+Step 3 decisions, taken on Ganesh's "go with your recommendations":
+1. **Corrections export** includes item and capture titles, with users
+   pseudonymised; an operator command, not an HTTP endpoint. The T&C must say
+   corrections may leave the database for improving Brain.
+2. **A skip breaks the streak** (Brain counts only completions); reviews show
+   skipped and missed apart. An `excused:` set was requested from Brain.
+3. **Moved**: the original day is not a miss; the occurrence shows on the new
+   day marked `movedFrom`; completing it counts for the original day.
+4. **Deleting a commitment archives it**: it disappears, its history stays.
+
+Still asked of Brain: the answering rung, model and confidence in
+`EnrichmentTrace`, so the log can say which model answered.

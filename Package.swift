@@ -6,7 +6,7 @@ import PackageDescription
 // SwiftPM names a path dependency after its folder and a git one after its URL,
 // so the product references below must use whichever identity is active.
 let brainFromGit = Context.environment["BRAIN_FROM_GIT"] == "1"
-let brainTag: Version = "0.6.0"
+let brainTag: Version = "0.7.0"
 let brain: Package.Dependency =
     brainFromGit
     ? .package(url: "https://github.com/GaneshPatil22/BrainForTaskManager.git", exact: brainTag)
