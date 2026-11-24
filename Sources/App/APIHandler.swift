@@ -60,7 +60,6 @@ struct APIHandler: APIProtocol {
             }
         }
 
-
         var problem: Components.Responses.Problem {
             .init(body: .json(.init(code: code, message: message)))
         }
