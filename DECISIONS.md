@@ -523,3 +523,26 @@ the Mac: with Supabase's `prod-ca-2021.crt`, the chain and hostname
 (`*.pooler.supabase.com`) verify (code 0). With system roots only, they fail
 (code 19: Supabase signs with its own root). `verify-full` without the file
 therefore fails closed.
+
+### 2026-11-24 — S6b: live at https://brain-api.corelearnly.com
+
+- **D3, start.** `.env` sent over SSH with `umask 077` set before any byte is
+  written (mode 600), plus the Supabase CA. `docker compose up -d`. Migrated
+  against Supabase over verify-full TLS on first start. Healthy in 25 s; uses
+  **6.4 MB**.
+- **Data API exposure, checked from outside.** The publishable key gets
+  `permission denied` (42501) on every table, including `_hb_pg_migrations`,
+  which has no RLS. The new project doesn't grant `anon` on tables created
+  directly, so RLS is the second layer, not the first. Run the security
+  advisor once the `supabase-brain` MCP is logged in.
+- **D5, Caddy.** Timestamped backup (`Caddyfile.bak-20261124-061852`), one
+  block appended (`reverse_proxy brain-server:8080`, 1 MB body limit),
+  `caddy validate`, then `caddy reload`. The "not formatted" warning points
+  at line 2 of the existing file, not ours. Rollback: restore the backup and
+  reload.
+- **D6, smoke test.** Let's Encrypt certificate, HTTP→HTTPS 308, `/health` 200,
+  `/v1/me` without a token 401, a full HTTPS request in 47 ms from the Mac. All
+  five existing sites still return 200.
+
+**Not yet verified in production:** a real signed-in request. That needs the
+website served from the VM (D7, same origin) or CORS.
