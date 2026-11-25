@@ -859,3 +859,26 @@ been called. No questions or corrections stored yet.
 
 Rollback: `BRAIN_IMAGE_TAG=425785b` (Brain 0.9.0) or `a15cdd4` (0.7.0, no
 questions), then `docker compose up -d`. No schema change since M0006.
+
+### 2026-11-25 — One-off: invariant 2 broken on purpose, for test data
+
+At Ganesh's explicit request ("delete them for real"), his own 10 test
+captures and their 10 items were deleted from production so his first real
+plan starts clean. Captures cannot be deleted (domain invariant 2;
+`captures_guard` has no exception), so it was done by hand in one
+transaction: delete the items, `ALTER TABLE captures DISABLE TRIGGER
+captures_guard`, delete that one user's captures, re-enable it, commit.
+Checked afterwards: 0 left for that user, trigger enabled (`O`). There were
+no corrections, edges, questions or daily plans to remove. No other user
+exists.
+
+Offered first and declined: mark the items `dropped` through the API and
+keep the captures. This is not a precedent. Real account deletion (on the
+list before friends use the app) needs a designed path: a server command
+that removes everything of one user's, recorded, rather than a trigger
+switched off by hand.
+
+His plan was then entered through the API as him (short-lived token, never
+printed or stored in a repo, deleted after use): 6 Q4 goals, 32 commitments
+(5 weekday office blocks, 8 daily habits, 8 rituals, 11 payment reminders
+with amounts only in notes), 5 idea captures.
