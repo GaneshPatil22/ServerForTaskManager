@@ -904,3 +904,18 @@ Looked for other writes that assume plan membership: none. One read keeps
 showing a confirmed big task even if its item is later retyped to an idea:
 `bigTask` in `/v1/plan` reflects what the user confirmed, not the ranking.
 Left as is, as the user's own record of that day.
+
+### 2026-11-25 — Brain 0.11.0 live (`brain-server:46b31a4`)
+
+Same procedure (`.env` backed up, mode 600); healthy on start. From outside:
+`/health` 200, `/v1/plan` and `/v1/questions` 401 without a token, website
+and the five other sites 200, Supabase data API 401 for `questions`. Ganesh's
+5 ideas are stored as `idea`/open, which `Scoring.appearsInPlan` keeps out
+of the plan while `/v1/items` still returns them.
+
+Quota so far (`budget_model_daily`, Pacific days): `gemini-decision-1` 10
+on 24 Nov, 1 on 23 Nov; Gemma and Flash-Lite still never called. No
+questions or corrections yet.
+
+Rollback: `BRAIN_IMAGE_TAG=0bb7946` (Brain 0.10.0), `docker compose up -d`.
+Nothing is stored differently.
