@@ -333,7 +333,10 @@ paths:
         `proposedItemId`. If `itemId` differs, the swap is recorded as a
         correction: it is what teaches the ranking. `day` may be yesterday,
         today or tomorrow (the evening planning ritual), else 400
-        `day_out_of_range`. The item must be open (400 `item_not_open`).
+        `day_out_of_range`. The item must be open (400 `item_not_open`), and
+        both it and `proposedItemId` must be something the plan holds: not an
+        idea or a note (400 `item_not_actionable`). An item whose type is not
+        yet known is allowed, as the plan ranks it.
       parameters: [{$ref: '#/components/parameters/Day'}]
       requestBody:
         required: true

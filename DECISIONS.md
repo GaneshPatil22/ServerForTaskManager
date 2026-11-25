@@ -882,3 +882,25 @@ His plan was then entered through the API as him (short-lived token, never
 printed or stored in a repo, deleted after use): 6 Q4 goals, 32 commitments
 (5 weekday office blocks, 8 daily habits, 8 rituals, 11 payment reminders
 with amounts only in notes), 5 idea captures.
+
+### 2026-11-25 — Brain 0.10.0 → 0.11.0: ideas and notes leave the plan; the big task agrees
+
+Pinned to tag 0.11.0 (`a26f4cd`, verified on the remote). Public API adds
+`ItemType.appearsInPlan` and `Scoring.appearsInPlan(_:)` and removes nothing.
+Behaviour: open items of type `idea` or `note` are no longer ranked (absent
+from `ranked`, `startable`, `next`, quick wins, blocked). `task`, `reminder`,
+`link` and an item whose type is still unknown (an unanswered T3 question)
+still rank. Computed at rank time: no data change, no migration.
+
+**The write side had to follow.** `PUT /v1/daily-plans/{day}` checked only
+that the item was open, so a client could confirm an idea as the big task.
+It now applies Brain's own `Scoring.appearsInPlan`, not a second copy of the
+rule, to `itemId` **and** `proposedItemId` (400 `item_not_actionable`). The
+proposed one matters too: a swap is stored as "Brain proposed X", which is
+false if X is something Brain never proposes. An unknown-type item is
+accepted, as the plan ranks it.
+
+Looked for other writes that assume plan membership: none. One read keeps
+showing a confirmed big task even if its item is later retyped to an idea:
+`bigTask` in `/v1/plan` reflects what the user confirmed, not the ranking.
+Left as is, as the user's own record of that day.

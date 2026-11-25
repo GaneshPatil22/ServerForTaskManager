@@ -379,6 +379,53 @@ struct PlannerAPITests {
     }
 
     /// D4: the swap is a correction; accepting is not.
+    /// Brain 0.11.0 leaves ideas and notes out of the plan; the write side
+    /// must agree, for the chosen item and for what Brain "proposed".
+    @Test func bigTaskMustBeSomethingThePlanHolds() async throws {
+        let me = Caller()
+        func typed(_ title: String, _ type: ItemType?) -> Item {
+            Item(
+                id: newID(), title: title,
+                type: type.map { Classified($0, confidence: 0.9, tier: .t0) } ?? .unknown(),
+                createdAt: mondayEarlyIST)
+        }
+        let idea = typed("idea: coaching business", .idea)
+        let note = typed("wifi password is on the router", .note)
+        let task = typed("call bank", .task)
+        let untyped = typed("the whole vendor situation", nil)
+        try await testApp(clock: { mondayEarlyIST }).test(.router) { client in
+            _ = try await me.send(client, .get, "/v1/me")
+            for item in [idea, note, task, untyped] { try await me.store().insertItem(item) }
+            func confirm(_ item: Item, proposed: Item? = nil) async throws -> (
+                status: HTTPResponse.Status, body: [String: Any]
+            ) {
+                var body = ["itemId": item.id.rawValue]
+                if let proposed { body["proposedItemId"] = proposed.id.rawValue }
+                return try await me.send(client, .put, "/v1/daily-plans/2026-11-23", json: body)
+            }
+
+            for refused in [idea, note] {
+                let r = try await confirm(refused)
+                #expect(r.status == .badRequest && code(r.body) == "item_not_actionable")
+            }
+            let fakeProposal = try await confirm(task, proposed: idea)
+            #expect(code(fakeProposal.body) == "item_not_actionable")
+            #expect(try await me.store().corrections().isEmpty)
+
+            // The plan ranks an item whose type is unknown, so it can be chosen.
+            #expect(try await confirm(untyped).status == .ok)
+            #expect(try await confirm(task, proposed: untyped).status == .ok)
+            #expect(try await me.store().corrections().map(\.field) == ["bigTask"])
+
+            // And the plan itself holds neither the idea nor the note.
+            let plan = try await me.send(client, .get, "/v1/plan").body
+            let ranked = (plan["ranked"] as? [[String: Any]] ?? []).compactMap {
+                ($0["item"] as? [String: Any])?["id"] as? String ?? $0["id"] as? String
+            }
+            #expect(Set(ranked) == [task.id.rawValue, untyped.id.rawValue])
+        }
+    }
+
     @Test func bigTaskSwapIsRecorded() async throws {
         let me = Caller()
         let proposed = Item(id: newID(), title: "send invoice", createdAt: mondayEarlyIST)

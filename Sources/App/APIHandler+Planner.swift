@@ -436,8 +436,25 @@ extension APIHandler {
                 guard item.status == .open else {
                     throw Stop.badRequest("item_not_open", "that item is already finished")
                 }
-                if let proposedId, try await store.item(proposedId) == nil {
-                    throw Stop.notFound("item")
+                // Brain's own rule for what the plan holds (0.11.0: not ideas or
+                // notes; an item whose type is still unknown is in). Checked
+                // here too, or the exclusion would hold on read and not on write.
+                guard Scoring.appearsInPlan(item) else {
+                    throw Stop.badRequest(
+                        "item_not_actionable",
+                        "ideas and notes are not planned; make it a task first")
+                }
+                if let proposedId {
+                    guard let proposed = try await store.item(proposedId) else {
+                        throw Stop.notFound("item")
+                    }
+                    // A swap is recorded as "Brain proposed this". Brain never
+                    // proposes an idea or a note, so that record would be false.
+                    guard Scoring.appearsInPlan(proposed) else {
+                        throw Stop.badRequest(
+                            "item_not_actionable",
+                            "Brain does not propose ideas or notes as the big task")
+                    }
                 }
                 let plan: DailyPlan
                 do {
