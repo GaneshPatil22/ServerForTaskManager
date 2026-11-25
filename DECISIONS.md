@@ -919,3 +919,40 @@ questions or corrections yet.
 
 Rollback: `BRAIN_IMAGE_TAG=0bb7946` (Brain 0.10.0), `docker compose up -d`.
 Nothing is stored differently.
+
+### 2026-11-25 — S7: comments and count goals (M0007)
+
+Built from `Brain/docs/00-charter.md`, "Outside Brain, not outside the
+product": the user's own records, which Brain never reads and which are
+never sent to a model.
+
+- **Comments** on items, goals and commitments. One table, three nullable
+  foreign keys and `CHECK (num_nonnulls(...) = 1)`, so a comment names
+  exactly one thing and that thing exists; a polymorphic `target_id` could
+  not have said either. Oldest first. Editable and deletable by their author.
+  `GET/POST /v1/comments` (exactly one of `itemId`, `goalId`, `commitmentId`,
+  else 400 `one_target`), `PATCH/DELETE /v1/comments/{id}`.
+- **Count goals, on goals only**, as the charter puts it. `goals.target_count`
+  (nullable, 1–1000) makes a goal a count goal; each filled circle is a
+  `goal_marks` row with a day and an optional note. Ganesh asked for counts
+  on "all tasks"; the charter scopes them to goals, so tasks would be a new
+  decision, not an extension.
+  - Filling is refused past the target (409 `target_reached`), and the goal
+    row is locked so two fills at once cannot overshoot. The target cannot
+    drop below, or be removed while, circles are filled (400
+    `target_below_done`): circles never disappear as a side effect.
+  - **Filling the last circle does not mark the goal achieved.** The human
+    confirms.
+  - A circle's day defaults to today in the user's zone and cannot be in the
+    future.
+  - **Counts of things, never money**: an integer target and one row per
+    occurrence. No amount, unit or sum exists anywhere.
+- `Goal` gains `targetCount` and `doneCount`, present exactly when it is a
+  count goal, everywhere a goal is returned (list, create, update, review).
+
+Delete paths are hard deletes (comments, marks). S6c's tombstones will need
+to cover them, alongside occurrences and journal entries.
+
+Additive: two tables (RLS on, covered by the every-table test) and one
+nullable column. The previous image names its goal columns, so rollback is
+the previous tag with nothing to undo.

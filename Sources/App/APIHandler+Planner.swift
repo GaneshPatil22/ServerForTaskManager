@@ -527,10 +527,13 @@ extension APIHandler {
                     guard let p = goal.period else { return false }
                     return p.start <= through && p.end >= from
                 }
+                let counts = try await store.goalCounts()
                 let goalReviews = overlapping.map { goal in
                     Components.Schemas.GoalReview(
-                        goal: .init(goal),
-                        children: graph.children(of: goal.id).map(Components.Schemas.Goal.init))
+                        goal: .init(goal, count: counts[goal.id]),
+                        children: graph.children(of: goal.id).map {
+                            .init($0, count: counts[$0.id])
+                        })
                 }
 
                 let plans = try await store.dailyPlans(from: from, through: through)

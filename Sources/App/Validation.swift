@@ -11,6 +11,33 @@ enum Validation {
     static let maxTitleLength = 500
     /// Longer than any option Brain offers; checked again against the stored set.
     static let maxOptionLength = 100
+    static let maxCommentLength = 2000
+    static let maxMarkNoteLength = 500
+    static let maxTargetCount = 1000
+
+    /// Exactly one of the three, as a stored target.
+    static func commentTarget(item: String?, goal: String?, commitment: String?)
+        throws(Failure) -> CommentTarget
+    {
+        let named = [item, goal, commitment].compactMap { $0 }
+        guard named.count == 1 else {
+            throw Failure(
+                code: "one_target",
+                message: "name exactly one of itemId, goalId or commitmentId")
+        }
+        if let item { return .item(try ulid(item, field: "itemId")) }
+        if let goal { return .goal(try ulid(goal, field: "goalId")) }
+        return .commitment(try ulid(commitment!, field: "commitmentId"))
+    }
+
+    /// A whole number of things, 1–1000. Never an amount.
+    static func targetCount(_ value: Int) throws(Failure) -> Int {
+        guard (1...maxTargetCount).contains(value) else {
+            throw Failure(
+                code: "invalid_target", message: "a target count is between 1 and 1000")
+        }
+        return value
+    }
     static let defaultLimit = 100
     static let maxLimit = 500
 

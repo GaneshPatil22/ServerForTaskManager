@@ -34,10 +34,40 @@ extension Components.Schemas.Capture {
 
 extension Components.Schemas.Goal {
     init(_ goal: BrainCore.Goal) {
+        self.init(goal, count: nil)
+    }
+
+    /// `count` is the goal's circles, when it is a count goal (M0007).
+    init(_ goal: BrainCore.Goal, count: GoalCount?) {
         self.init(
             id: goal.id.rawValue, title: goal.title, status: convert(goal.status),
             createdAt: goal.createdAt, period: goal.period?.description,
-            periodText: goal.period?.text, parentId: goal.parentId?.rawValue)
+            periodText: goal.period?.text, parentId: goal.parentId?.rawValue,
+            targetCount: count?.target, doneCount: count?.done)
+    }
+}
+
+extension Components.Schemas.Comment {
+    init(_ comment: StoredComment) {
+        var item: String?
+        var goal: String?
+        var commitment: String?
+        switch comment.target {
+        case .item(let id): item = id.rawValue
+        case .goal(let id): goal = id.rawValue
+        case .commitment(let id): commitment = id.rawValue
+        }
+        self.init(
+            id: comment.id.rawValue, itemId: item, goalId: goal, commitmentId: commitment,
+            body: comment.body, createdAt: comment.createdAt, updatedAt: comment.updatedAt)
+    }
+}
+
+extension Components.Schemas.GoalMark {
+    init(_ mark: Storage.GoalMark) {
+        self.init(
+            id: mark.id.rawValue, goalId: mark.goalId.rawValue, day: mark.day.description,
+            note: mark.note, createdAt: mark.createdAt, updatedAt: mark.updatedAt)
     }
 }
 

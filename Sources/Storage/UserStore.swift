@@ -130,12 +130,17 @@ public struct UserStore: Sendable {
 
     /// Idempotent on id: a retry returns the stored goal and `created == false`.
     @discardableResult
-    public func insertGoal(_ goal: Goal) async throws -> (goal: Goal, created: Bool) {
+    /// `targetCount` makes it a count goal (M0007); nil is an ordinary goal.
+    public func insertGoal(_ goal: Goal, targetCount: Int? = nil) async throws
+        -> (goal: Goal, created: Bool)
+    {
         let created = try await returnsRow(
             """
-            INSERT INTO goals (user_id, id, title, status, created_at, period, parent_id)
+            INSERT INTO goals (user_id, id, title, status, created_at, period, parent_id,
+                               target_count)
             VALUES (\(uid), \(goal.id.rawValue), \(goal.title), \(goal.status.rawValue),
-                    \(goal.createdAt), \(goal.period?.description), \(goal.parentId?.rawValue))
+                    \(goal.createdAt), \(goal.period?.description), \(goal.parentId?.rawValue),
+                    \(targetCount))
             ON CONFLICT DO NOTHING
             RETURNING id
             """)

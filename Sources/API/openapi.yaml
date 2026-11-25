@@ -156,13 +156,109 @@ paths:
         A month goal may name a quarter goal as its parent only if that
         quarter contains the month; anything else is 400 `invalid_rollup`.
         Changing a quarter's period is refused the same way if a month goal
-        rolling up into it would no longer fit.
+        rolling up into it would no longer fit. `targetCount` makes it a
+        count goal; lowering it below the circles already filled, or clearing
+        it while any are filled, is 400 `target_below_done`.
       parameters: [{$ref: '#/components/parameters/Id'}]
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/GoalUpdate'}}}
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Goal'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/goals/{id}/marks:
+    get:
+      operationId: listGoalMarks
+      summary: The filled circles of a count goal, oldest day first.
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/GoalMarkList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      operationId: addGoalMark
+      summary: Fill one circle of a count goal.
+      description: |
+        `day` defaults to today in the user's timezone and may not be in the
+        future (400 `in_future`). 400 `not_a_count_goal` if the goal has no
+        `targetCount`; 409 `target_reached` when every circle is filled
+        (raising the target is the user's call). Filling the last circle does
+        not mark the goal achieved. Idempotent on `id`.
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/NewGoalMark'}}}
+      responses:
+        '201': {description: Created., content: {application/json: {schema: {$ref: '#/components/schemas/GoalMark'}}}}
+        '200': {description: Already created with this id., content: {application/json: {schema: {$ref: '#/components/schemas/GoalMark'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/goals/{id}/marks/{markId}:
+    patch:
+      operationId: updateGoalMark
+      summary: Change or remove a filled circle's note.
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/MarkId'}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/GoalMarkUpdate'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/GoalMark'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      operationId: deleteGoalMark
+      summary: Empty a circle.
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {$ref: '#/components/parameters/MarkId'}
+      responses:
+        '204': {description: Emptied.}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/comments:
+    get:
+      operationId: listComments
+      summary: The comments on one item, goal or commitment, oldest first.
+      description: |
+        Name exactly one of `itemId`, `goalId`, `commitmentId` (else 400
+        `one_target`). Comments are the user's own notes: Brain never reads
+        them and they are never sent to a model.
+      parameters:
+        - {name: itemId, in: query, schema: {$ref: '#/components/schemas/ULID'}}
+        - {name: goalId, in: query, schema: {$ref: '#/components/schemas/ULID'}}
+        - {name: commitmentId, in: query, schema: {$ref: '#/components/schemas/ULID'}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/CommentList'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      operationId: createComment
+      summary: Comment on one item, goal or commitment. Idempotent on `id`.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/NewComment'}}}
+      responses:
+        '201': {description: Created., content: {application/json: {schema: {$ref: '#/components/schemas/Comment'}}}}
+        '200': {description: Already created with this id., content: {application/json: {schema: {$ref: '#/components/schemas/Comment'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+
+  /v1/comments/{id}:
+    patch:
+      operationId: updateComment
+      summary: Rewrite a comment.
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CommentUpdate'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Comment'}}}}
+        default: {$ref: '#/components/responses/Problem'}
+    delete:
+      operationId: deleteComment
+      summary: Delete a comment.
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '204': {description: Deleted.}
         default: {$ref: '#/components/responses/Problem'}
 
   /v1/plan:
@@ -439,6 +535,11 @@ components:
       description: A Supabase access token, ES256 or RS256. Anonymous users are refused.
 
   parameters:
+    MarkId:
+      name: markId
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/ULID'}
     Id:
       name: id
       in: path
@@ -641,6 +742,7 @@ components:
         title: {type: string, minLength: 1, maxLength: 500}
         period: {$ref: '#/components/schemas/Period'}
         parentId: {$ref: '#/components/schemas/ULID'}
+        targetCount: {$ref: '#/components/schemas/TargetCount'}
     GoalUpdate:
       type: object
       properties:
@@ -648,10 +750,11 @@ components:
         status: {$ref: '#/components/schemas/GoalStatus'}
         period: {$ref: '#/components/schemas/Period'}
         parentId: {$ref: '#/components/schemas/ULID'}
+        targetCount: {$ref: '#/components/schemas/TargetCount'}
         clear:
           type: array
           description: Fields to remove. A field may not be both sent and cleared.
-          items: {type: string, enum: [period, parentId]}
+          items: {type: string, enum: [period, parentId, targetCount]}
     Goal:
       type: object
       required: [id, title, status, createdAt]
@@ -663,6 +766,8 @@ components:
         period: {$ref: '#/components/schemas/Period'}
         periodText: {type: string, description: 'For display, e.g. "November 2026", "Q4 2026".'}
         parentId: {$ref: '#/components/schemas/ULID'}
+        targetCount: {$ref: '#/components/schemas/TargetCount'}
+        doneCount: {type: integer, minimum: 0, description: 'Circles filled. Present exactly when `targetCount` is.'}
     GoalList:
       type: object
       required: [goals]
@@ -956,3 +1061,70 @@ components:
       required: [option]
       properties:
         option: {type: string, description: "One of the question's `options`, exactly."}
+    TargetCount:
+      type: integer
+      minimum: 1
+      maximum: 1000
+      description: 'Makes a goal a count goal: this many circles. A count of things, never an amount of money.'
+    NewGoalMark:
+      type: object
+      required: [id]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        day: {$ref: '#/components/schemas/Day'}
+        note: {type: string, minLength: 1, maxLength: 500}
+    GoalMarkUpdate:
+      type: object
+      properties:
+        note: {type: string, minLength: 1, maxLength: 500}
+        clear:
+          type: array
+          description: Fields to remove. A field may not be both sent and cleared.
+          items: {type: string, enum: [note]}
+    GoalMark:
+      type: object
+      required: [id, goalId, day, createdAt, updatedAt]
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        goalId: {$ref: '#/components/schemas/ULID'}
+        day: {$ref: '#/components/schemas/Day'}
+        note: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    GoalMarkList:
+      type: object
+      required: [marks]
+      properties:
+        marks: {type: array, items: {$ref: '#/components/schemas/GoalMark'}}
+    NewComment:
+      type: object
+      required: [id, body]
+      description: Exactly one of `itemId`, `goalId`, `commitmentId` (else 400 `one_target`).
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        itemId: {$ref: '#/components/schemas/ULID'}
+        goalId: {$ref: '#/components/schemas/ULID'}
+        commitmentId: {$ref: '#/components/schemas/ULID'}
+        body: {type: string, minLength: 1, maxLength: 2000}
+    CommentUpdate:
+      type: object
+      required: [body]
+      properties:
+        body: {type: string, minLength: 1, maxLength: 2000}
+    Comment:
+      type: object
+      required: [id, body, createdAt, updatedAt]
+      description: Exactly one of `itemId`, `goalId`, `commitmentId` is present.
+      properties:
+        id: {$ref: '#/components/schemas/ULID'}
+        itemId: {$ref: '#/components/schemas/ULID'}
+        goalId: {$ref: '#/components/schemas/ULID'}
+        commitmentId: {$ref: '#/components/schemas/ULID'}
+        body: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CommentList:
+      type: object
+      required: [comments]
+      properties:
+        comments: {type: array, items: {$ref: '#/components/schemas/Comment'}}

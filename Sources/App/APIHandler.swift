@@ -249,8 +249,11 @@ struct APIHandler: APIProtocol {
                     if let period { try await store.goals(in: period) } else {
                         try await store.goals()
                     }
+                let counts = try await store.goalCounts()
                 return .ok(
-                    .init(body: .json(.init(goals: goals.map(Components.Schemas.Goal.init)))))
+                    .init(
+                        body: .json(
+                            .init(goals: goals.map { .init($0, count: counts[$0.id]) }))))
             }, problem: { .default(statusCode: $0, $1) })
     }
 
@@ -272,10 +275,16 @@ struct APIHandler: APIProtocol {
                         period: try Validation.optionalPeriod(body.period, field: "period"),
                         parentId: try Validation.optionalULID(body.parentId, field: "parentId"))
                 }
+                let target = try check { () throws(Validation.Failure) in
+                    try body.targetCount.map { n throws(Validation.Failure) in
+                        try Validation.targetCount(n)
+                    }
+                }
                 let store = try await store()
                 try await checkRollUp(goal, store: store)
-                let (stored, created) = try await store.insertGoal(goal)
-                let json = Components.Schemas.Goal(stored)
+                let (stored, created) = try await store.insertGoal(goal, targetCount: target)
+                let json = Components.Schemas.Goal(
+                    stored, count: try await store.goalCounts()[stored.id])
                 return created ? .created(.init(body: .json(json))) : .ok(.init(body: .json(json)))
             }, problem: { .default(statusCode: $0, $1) })
     }
@@ -298,6 +307,7 @@ struct APIHandler: APIProtocol {
                 goal = try check { () throws(Validation.Failure) in
                     if clear.contains(.period) && body.period != nil
                         || clear.contains(.parentId) && body.parentId != nil
+                        || clear.contains(.targetCount) && body.targetCount != nil
                     {
                         throw Validation.Failure(
                             code: "conflicting_clear", message: "a field is both sent and cleared")
@@ -319,8 +329,27 @@ struct APIHandler: APIProtocol {
                     return g
                 }
                 try await checkRollUp(goal, store: store)
+                // The count first: it is the part that can be refused, so a
+                // refusal leaves the whole goal unchanged.
+                if let n = body.targetCount {
+                    let target = try check { () throws(Validation.Failure) in
+                        try Validation.targetCount(n)
+                    }
+                    do {
+                        try await store.setGoalTarget(id, to: target)
+                    } catch let refusal as CountRefusal {
+                        throw Stop(refusal)
+                    }
+                } else if clear.contains(.targetCount) {
+                    do {
+                        try await store.setGoalTarget(id, to: nil)
+                    } catch let refusal as CountRefusal {
+                        throw Stop(refusal)
+                    }
+                }
                 guard try await store.replaceGoal(goal) else { throw Stop.notFound("goal") }
-                return .ok(.init(body: .json(.init(goal))))
+                return .ok(
+                    .init(body: .json(.init(goal, count: try await store.goalCounts()[goal.id]))))
             }, problem: { .default(statusCode: $0, $1) })
     }
 
