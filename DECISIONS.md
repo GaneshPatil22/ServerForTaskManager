@@ -956,3 +956,15 @@ to cover them, alongside occurrences and journal entries.
 Additive: two tables (RLS on, covered by the every-table test) and one
 nullable column. The previous image names its goal columns, so rollback is
 the previous tag with nothing to undo.
+
+### 2026-11-25 — S7 live (`brain-server:69541db`, Brain 0.11.0)
+
+Brain has no tag after 0.11.0, so this is the full current server. Same
+procedure (`.env` backed up, mode 600); M0007 migrated on start; healthy.
+From outside: `/health` 200, `/v1/comments` and `/v1/goals` 401 without a
+token, website and the five other sites 200, Supabase data API 401 for
+`comments` and `goal_marks`. Ganesh's 6 goals and 32 commitments are intact;
+no goal has a target yet.
+
+Rollback: `BRAIN_IMAGE_TAG=46b31a4`, `docker compose up -d`. M0007 only
+added tables and a nullable column, which that image never reads.
